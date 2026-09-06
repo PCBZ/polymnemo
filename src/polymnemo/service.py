@@ -52,3 +52,39 @@ class MemoryService:
             ids.append(memory.id)
 
         return {"ids": ids, "chunks": len(ids), "namespace": ns}
+
+    def recall(
+        self,
+        user_id: str,
+        query: str,
+        namespace: str | None = None,
+        limit: int | None = None,
+        cursor: str | None = None,
+    ) -> dict:
+        """Semantic search: return bounded, similarity-ranked memories plus
+        pagination metadata. The server ranks and bounds; the client decides
+        whether the results are enough or to page further.
+        """
+        query = (query or "").strip()
+        if not query:
+            raise ValueError("query is empty")
+
+        ns = namespace or settings.default_namespace
+        limit = settings.recall_limit if limit is None else max(1, limit)
+        # The cursor is just the next offset as a string; missing/invalid -> 0.
+        try:
+            offset = max(0, int(cursor)) if cursor else 0
+        except (TypeError, ValueError):
+            offset = 0
+
+        rows = self.ctx.retriever.search(user_id, query, ns, limit, offset)
+        total = self.ctx.store.count(user_id, ns)
+        next_offset = offset + len(rows)
+        has_more = next_offset < total
+
+        return {
+            "items": [row.to_public() for row in rows],
+            "total": total,
+            "has_more": has_more,
+            "next_cursor": str(next_offset) if has_more else None,
+        }

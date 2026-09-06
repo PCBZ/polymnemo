@@ -30,7 +30,7 @@ mcp: FastMCP = FastMCP(
     name="polymnemo",
     instructions=(
         "Shared long-term memory across any LLM. Authenticate with a per-user "
-        "bearer key; use `remember` to store and (soon) `recall` to search."
+        "bearer key; use `remember` to store and `recall` to search semantically."
     ),
 )
 
@@ -82,6 +82,31 @@ def remember(
     try:
         return service.remember(
             user_id, content, namespace=namespace, tags=tags, source=source
+        )
+    except ValueError as exc:
+        raise ToolError(str(exc))
+
+
+@mcp.tool(annotations={"readOnlyHint": True})
+def recall(
+    query: str,
+    namespace: str | None = None,
+    limit: int = 8,
+    cursor: str | None = None,
+) -> dict:
+    """Search memories by meaning and return the closest matches.
+
+    Results are ranked by similarity and bounded by `limit` (default 8). Use the
+    returned `next_cursor` with `has_more` to page further — you decide whether
+    the results are enough. `namespace` selects the collection (defaults to the
+    shared namespace).
+
+    Returns `{items, total, has_more, next_cursor}`.
+    """
+    user_id = _current_user()
+    try:
+        return service.recall(
+            user_id, query, namespace=namespace, limit=limit, cursor=cursor
         )
     except ValueError as exc:
         raise ToolError(str(exc))
