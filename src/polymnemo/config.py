@@ -33,8 +33,13 @@ class Settings(BaseSettings):
     # A multilingual model keeps Chinese / cross-language recall working out of
     # the box. The dimension is pinned here (and, later, into the DB schema), so
     # it must match the model: changing the model means re-embedding everything.
-    embed_model: str = "intfloat/multilingual-e5-small"
+    # (paraphrase-multilingual-MiniLM-L12-v2 is fastembed's multilingual 384-dim
+    # option; intfloat/multilingual-e5-small is NOT in fastembed's model list.)
+    embed_model: str = "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
     embed_dim: int = 384
+    # Which embedder to wire: "fastembed" (real ONNX model) or "stub"
+    # (dependency-free hashed bag-of-words, for offline dev / tests).
+    embed_backend: str = "fastembed"
 
     # --- Chunking ------------------------------------------------------------
     # Large content is split on write so recall always returns "N small things".

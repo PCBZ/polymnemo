@@ -20,6 +20,8 @@ dependencies = [
     # Declarative env-var config (already pulled in transitively by fastmcp;
     # depended on directly since config.py imports it).
     "pydantic-settings>=2.0",
+    # Local, deterministic embeddings (ONNX, no API key). Brings numpy.
+    "fastembed>=0.4",
 ]
 
 [project.scripts]
