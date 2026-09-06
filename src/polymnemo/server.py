@@ -13,8 +13,13 @@ from fastmcp import FastMCP
 
 from . import __version__
 from .config import settings
+from .context import build_context
 
 logger = logging.getLogger("polymnemo")
+
+# The pluggable layers (Auth / Store / Retriever / Embedder), assembled once.
+# The Phase 1 memory tools will call through this context.
+ctx = build_context()
 
 mcp: FastMCP = FastMCP(
     name="polymnemo",
@@ -29,10 +34,16 @@ mcp: FastMCP = FastMCP(
 def ping() -> dict:
     """Health / connectivity check.
 
-    Returns basic server identity so a client (or MCP Inspector) can confirm the
-    connection. Placeholder tool for the Phase 0 skeleton.
+    Returns server identity plus the active pluggable layers, so a client (or
+    MCP Inspector) can confirm the connection and see how the server is wired.
+    Placeholder tool for the Phase 0 skeleton.
     """
-    return {"ok": True, "server": "polymnemo", "version": __version__}
+    return {
+        "ok": True,
+        "server": "polymnemo",
+        "version": __version__,
+        "layers": ctx.describe(),
+    }
 
 
 def main() -> None:
