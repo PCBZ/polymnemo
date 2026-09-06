@@ -1,0 +1,37 @@
+[project]
+name = "polymnemo"
+version = "0.0.1"
+description = "A shared long-term memory across any LLM, over MCP"
+readme = "README.md"
+license = { file = "LICENSE" }
+requires-python = ">=3.11"
+authors = [{ name = "PCBZ" }]
+keywords = ["mcp", "memory", "llm", "embeddings", "pgvector", "fastmcp"]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+]
+# Kept intentionally minimal for the Phase 0 #1 skeleton. Later issues add their
+# own deps: embeddings (#3 -> fastembed, numpy), Postgres store (#6 -> psycopg,
+# pgvector), tests (#13 -> pytest).
+dependencies = [
+    "fastmcp>=2.0",
+    # Declarative env-var config (already pulled in transitively by fastmcp;
+    # depended on directly since config.py imports it).
+    "pydantic-settings>=2.0",
+]
+
+[project.scripts]
+polymnemo = "polymnemo.server:main"
+
+[project.urls]
+Homepage = "https://github.com/PCBZ/polymnemo"
+Repository = "https://github.com/PCBZ/polymnemo"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/polymnemo"]
