@@ -216,3 +216,9 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# gemini-cli settings
+.gemini/
+
+# GitHub App credentials (run-gemini-cli)
+gha-creds-*.json
