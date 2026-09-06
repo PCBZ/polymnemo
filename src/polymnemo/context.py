@@ -1,14 +1,15 @@
 """Application context — assemble the pluggable layers from config.
 
 One place that decides which Auth / Store / Retriever / Embedder implementations
-are active. Phase 0 wires the dev defaults (static auth, in-memory store, stub
-embedder); later issues swap in the real ones (BearerKeyAuth #5, PostgresStore
-#6, fastembed Embedder #3) without touching call sites.
+are active (a lightweight composition root). Phase 0 wires the dev defaults
+(static auth, in-memory store, stub embedder); later issues swap in the real
+ones (BearerKeyAuth #5, PostgresStore #6, fastembed Embedder #3) without
+touching call sites.
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from pydantic import BaseModel, ConfigDict
 
 from .auth import Auth, StaticAuth
 from .config import settings
@@ -17,8 +18,13 @@ from .retriever import Retriever, VectorRetriever
 from .store import InMemoryStore, Store
 
 
-@dataclass
-class AppContext:
+class AppContext(BaseModel):
+    # Holds live service objects, not plain data: allow arbitrary types, and
+    # freeze it since the wiring shouldn't change after startup. Field types are
+    # the layer Protocols, so pydantic validates each implementation against them
+    # (this is why they are @runtime_checkable).
+    model_config = ConfigDict(arbitrary_types_allowed=True, frozen=True)
+
     auth: Auth
     store: Store
     embedder: Embedder
