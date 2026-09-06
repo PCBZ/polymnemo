@@ -1,0 +1,45 @@
+"""Runtime configuration.
+
+Sourced from environment variables (prefix ``POLYMNEMO_``) and an optional
+``.env`` file, via pydantic-settings — it handles type coercion, defaults, and
+empty-value fallback declaratively.
+
+Scope for Phase 0 #1: HTTP transport plus the embedding/chunking knobs the
+skeleton carries. Later issues extend this (database URL in #2/#6, API keys in
+#5, namespaces/limits in Phase 1).
+"""
+
+from __future__ import annotations
+
+from pydantic import AliasChoices, Field
+from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+class Settings(BaseSettings):
+    model_config = SettingsConfigDict(
+        env_prefix="POLYMNEMO_",  # POLYMNEMO_HOST, POLYMNEMO_MCP_PATH, ...
+        env_file=".env",
+        env_ignore_empty=True,  # an empty/unset var falls back to the default
+        extra="ignore",
+    )
+
+    # --- HTTP transport ------------------------------------------------------
+    host: str = "127.0.0.1"
+    # Prefer POLYMNEMO_PORT; fall back to Cloud Run's injected PORT; then 8000.
+    port: int = Field(8000, validation_alias=AliasChoices("POLYMNEMO_PORT", "PORT"))
+    mcp_path: str = "/mcp"
+
+    # --- Embeddings ----------------------------------------------------------
+    # A multilingual model keeps Chinese / cross-language recall working out of
+    # the box. The dimension is pinned here (and, later, into the DB schema), so
+    # it must match the model: changing the model means re-embedding everything.
+    embed_model: str = "intfloat/multilingual-e5-small"
+    embed_dim: int = 384
+
+    # --- Chunking ------------------------------------------------------------
+    # Large content is split on write so recall always returns "N small things".
+    chunk_size: int = 1000
+    chunk_overlap: int = 100
+
+
+settings = Settings()
