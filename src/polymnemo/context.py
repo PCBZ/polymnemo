@@ -12,13 +12,16 @@ validate/serialize), and the wiring shouldn't change after startup.
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 
-from .auth import Auth, StaticAuth
+from .auth import Auth, BearerKeyAuth, StaticAuth
 from .config import settings
 from .embedding import Embedder, FastEmbedEmbedder, StubEmbedder
 from .retriever import Retriever, VectorRetriever
 from .store import InMemoryStore, Store
+
+logger = logging.getLogger("polymnemo")
 
 
 @dataclass(frozen=True)
@@ -44,11 +47,23 @@ def _build_embedder() -> Embedder:
     return FastEmbedEmbedder()
 
 
+def _build_auth() -> Auth:
+    if settings.auth_backend == "static":
+        return StaticAuth()
+    keys = settings.parse_api_keys()
+    if not keys:
+        logger.warning(
+            "auth_backend=bearer but no POLYMNEMO_API_KEYS set; all requests "
+            "will be rejected. Set keys, or use POLYMNEMO_AUTH_BACKEND=static for dev."
+        )
+    return BearerKeyAuth(keys)
+
+
 def build_context() -> AppContext:
     # Phase 0 dev defaults. As real implementations land, select here (e.g. by
     # settings.database_url for the store) instead of the in-memory one.
     store: Store = InMemoryStore()
     embedder: Embedder = _build_embedder()
     retriever: Retriever = VectorRetriever(store=store, embedder=embedder)
-    auth: Auth = StaticAuth()
+    auth: Auth = _build_auth()
     return AppContext(auth=auth, store=store, embedder=embedder, retriever=retriever)
