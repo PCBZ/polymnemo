@@ -22,6 +22,10 @@ dependencies = [
     "pydantic-settings>=2.0",
     # Local, deterministic embeddings (ONNX, no API key). Brings numpy.
     "fastembed>=0.4",
+    # Token-aware chunking (Rust; respects the model's context window).
+    "semantic-text-splitter>=0.13",
+    # HF tokenizer used to size chunks in tokens (also a fastembed dep).
+    "tokenizers>=0.15",
 ]
 
 [project.scripts]
