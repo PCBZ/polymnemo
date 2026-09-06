@@ -52,6 +52,10 @@ class Settings(BaseSettings):
     # Default collection when a tool call omits one (shared vs private is #14).
     default_namespace: str = "shared"
 
+    # --- Recall --------------------------------------------------------------
+    # Default page size for recall; the client decides whether to page further.
+    recall_limit: int = 8
+
     # --- Auth ----------------------------------------------------------------
     # "bearer" (per-user keys, the real scheme) or "static" (dev, single user).
     auth_backend: str = "bearer"
