@@ -16,7 +16,7 @@ from dataclasses import dataclass
 
 from .auth import Auth, StaticAuth
 from .config import settings
-from .embedding import Embedder, StubEmbedder
+from .embedding import Embedder, FastEmbedEmbedder, StubEmbedder
 from .retriever import Retriever, VectorRetriever
 from .store import InMemoryStore, Store
 
@@ -38,11 +38,17 @@ class AppContext:
         }
 
 
+def _build_embedder() -> Embedder:
+    if settings.embed_backend == "stub":
+        return StubEmbedder(dim=settings.embed_dim)
+    return FastEmbedEmbedder()
+
+
 def build_context() -> AppContext:
     # Phase 0 dev defaults. As real implementations land, select here (e.g. by
-    # settings.database_url) instead of always using the in-memory/stub ones.
+    # settings.database_url for the store) instead of the in-memory one.
     store: Store = InMemoryStore()
-    embedder: Embedder = StubEmbedder(dim=settings.embed_dim)
+    embedder: Embedder = _build_embedder()
     retriever: Retriever = VectorRetriever(store=store, embedder=embedder)
     auth: Auth = StaticAuth()
     return AppContext(auth=auth, store=store, embedder=embedder, retriever=retriever)

@@ -7,9 +7,14 @@
 
 FROM python:3.11-slim
 
+# Pinned so the baked model matches the runtime model. Must equal
+# POLYMNEMO_EMBED_MODEL / the config default (and the DB schema's vector dim).
+ARG POLYMNEMO_EMBED_MODEL=sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2
+
 ENV PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1 \
-    POLYMNEMO_HOST=0.0.0.0
+    POLYMNEMO_HOST=0.0.0.0 \
+    POLYMNEMO_EMBED_MODEL=${POLYMNEMO_EMBED_MODEL}
 
 WORKDIR /app
 
@@ -18,9 +23,9 @@ COPY pyproject.toml README.md LICENSE ./
 COPY src ./src
 RUN pip install --no-cache-dir .
 
-# NOTE (#3): preload the embedding model here so cold starts don't download it
-# on first request, e.g.:
-#   RUN python -c "from fastembed import TextEmbedding; TextEmbedding('intfloat/multilingual-e5-small')"
+# Bake the embedding model into the image so cold starts don't download it
+# (the first request still initializes the ONNX session, but hits no network).
+RUN python -c "from fastembed import TextEmbedding; TextEmbedding('${POLYMNEMO_EMBED_MODEL}')"
 
 # Documentation only; Cloud Run routes to $PORT regardless.
 EXPOSE 8080
