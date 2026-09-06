@@ -41,6 +41,18 @@ jobs:
       - name: 'Checkout repository'
         uses: 'actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8' # ratchet:actions/checkout@v6
 
+      # Pre-install the code-review extension non-interactively. The action's own
+      # `extensions:` install pipes `echo "Y"`, which can't answer the CLI's
+      # extension + skills trust prompts and hangs in CI. `--consent
+      # --skip-settings` (with empty stdin) installs it cleanly. It lands in
+      # ~/.gemini/extensions, which the action's `gemini` run picks up (same job).
+      - name: 'Install code-review extension (non-interactive)'
+        env:
+          GEMINI_CLI_VERSION: ${{ vars.GEMINI_CLI_VERSION || 'latest' }}
+        run: |-
+          npx -y "@google/gemini-cli@${GEMINI_CLI_VERSION}" extensions install \
+            https://github.com/gemini-cli-extensions/code-review --consent --skip-settings </dev/null
+
       - name: 'Run Gemini pull request review'
         uses: 'google-github-actions/run-gemini-cli@v0' # ratchet:exclude
         id: 'gemini_pr_review'
@@ -109,8 +121,6 @@ jobs:
                 ]
               }
             }
-          extensions: |
-            [
-              "https://github.com/gemini-cli-extensions/code-review"
-            ]
+          # The extension is pre-installed non-interactively in the step above,
+          # so the action's own (hang-prone) `extensions:` install is omitted.
           prompt: '/pr-code-review'
