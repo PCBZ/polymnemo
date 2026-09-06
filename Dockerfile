@@ -23,9 +23,11 @@ COPY pyproject.toml README.md LICENSE ./
 COPY src ./src
 RUN pip install --no-cache-dir .
 
-# Bake the embedding model into the image so cold starts don't download it
-# (the first request still initializes the ONNX session, but hits no network).
-RUN python -c "from fastembed import TextEmbedding; TextEmbedding('${POLYMNEMO_EMBED_MODEL}')"
+# Bake the embedding model AND its tokenizer (used for token-aware chunking)
+# into the image so cold starts don't download them (first request still
+# initializes the ONNX session, but hits no network).
+RUN python -c "from fastembed import TextEmbedding; TextEmbedding('${POLYMNEMO_EMBED_MODEL}')" \
+ && python -c "from tokenizers import Tokenizer; Tokenizer.from_pretrained('${POLYMNEMO_EMBED_MODEL}')"
 
 # Documentation only; Cloud Run routes to $PORT regardless.
 EXPOSE 8080

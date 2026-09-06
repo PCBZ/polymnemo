@@ -42,9 +42,15 @@ class Settings(BaseSettings):
     embed_backend: str = "fastembed"
 
     # --- Chunking ------------------------------------------------------------
-    # Large content is split on write so recall always returns "N small things".
-    chunk_size: int = 1000
-    chunk_overlap: int = 100
+    # Split on write so recall returns "N small things". Sized in *tokens* to fit
+    # the model's context window (kept under the 128-token cap of the default
+    # model), so a chunk's tail is never truncated out of its embedding.
+    chunk_tokens: int = 120
+    chunk_overlap_tokens: int = 20
+
+    # --- Namespaces ----------------------------------------------------------
+    # Default collection when a tool call omits one (shared vs private is #14).
+    default_namespace: str = "shared"
 
     # --- Auth ----------------------------------------------------------------
     # "bearer" (per-user keys, the real scheme) or "static" (dev, single user).
