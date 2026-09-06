@@ -49,6 +49,9 @@ jobs:
           # gh reads GH_TOKEN; give it the same token so the model can read the
           # diff and post the review comment via the gh CLI.
           GH_TOKEN: '${{ steps.mint_identity_token.outputs.token || secrets.GITHUB_TOKEN || github.token }}'
+          # Trust the checked-out workspace so the CLI will run shell (gh) commands
+          # headlessly; otherwise folder-trust downgrades YOLO and blocks them.
+          GEMINI_CLI_TRUST_WORKSPACE: 'true'
           ISSUE_TITLE: '${{ github.event.pull_request.title || github.event.issue.title }}'
           ISSUE_BODY: '${{ github.event.pull_request.body || github.event.issue.body }}'
           PULL_REQUEST_NUMBER: '${{ github.event.pull_request.number || github.event.issue.number }}'
