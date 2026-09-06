@@ -41,16 +41,23 @@ jobs:
       - name: 'Checkout repository'
         uses: 'actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8' # ratchet:actions/checkout@v6
 
+      # Fetch the diff deterministically (not via the model) into a file that the
+      # model reads with `cat`.
+      - name: 'Fetch PR diff'
+        env:
+          GH_TOKEN: '${{ steps.mint_identity_token.outputs.token || secrets.GITHUB_TOKEN || github.token }}'
+        run: |-
+          gh pr diff '${{ github.event.pull_request.number || github.event.issue.number }}' \
+            --repo '${{ github.repository }}' > pr.diff
+          echo "diff bytes: $(wc -c < pr.diff)"
+
       - name: 'Run Gemini pull request review'
         uses: 'google-github-actions/run-gemini-cli@v0' # ratchet:exclude
         id: 'gemini_pr_review'
         env:
           GITHUB_TOKEN: '${{ steps.mint_identity_token.outputs.token || secrets.GITHUB_TOKEN || github.token }}'
-          # gh reads GH_TOKEN; give it the same token so the model can read the
-          # diff and post the review comment via the gh CLI.
-          GH_TOKEN: '${{ steps.mint_identity_token.outputs.token || secrets.GITHUB_TOKEN || github.token }}'
-          # Trust the checked-out workspace so the CLI will run shell (gh) commands
-          # headlessly; otherwise folder-trust downgrades YOLO and blocks them.
+          # Trust the checked-out workspace so the CLI can `cat` the diff file
+          # headlessly (folder-trust otherwise blocks shell tools).
           GEMINI_CLI_TRUST_WORKSPACE: 'true'
           ISSUE_TITLE: '${{ github.event.pull_request.title || github.event.issue.title }}'
           ISSUE_BODY: '${{ github.event.pull_request.body || github.event.issue.body }}'
@@ -86,29 +93,35 @@ jobs:
               },
               "tools": {
                 "core": [
-                  "run_shell_command(gh)",
-                  "run_shell_command(cat)",
-                  "run_shell_command(grep)"
+                  "run_shell_command(cat)"
                 ]
               }
             }
-          # No MCP server / extension: the model uses the gh CLI directly
-          # (authenticated via GH_TOKEN) to read the diff and post the review.
+          # The model only READS the diff and WRITES the review text; the workflow
+          # posts it (next step) — no reliance on the model to run a post command.
           prompt: |-
-            You are an automated code reviewer.
-            Repository: ${{ github.repository }}
-            Pull request number: ${{ github.event.pull_request.number || github.event.issue.number }}
+            You are an automated code reviewer for a GitHub pull request.
 
-            Use the `gh` CLI (already authenticated). Steps:
-            1. Get the diff:
-               gh pr diff ${{ github.event.pull_request.number || github.event.issue.number }} --repo ${{ github.repository }}
-            2. Review it against this repository's GEMINI.md standards (already loaded
-               as context). Grade findings by severity; only Critical/High are
-               blocking; keep Medium/Low short.
-            3. Post exactly one review comment by running:
-               gh pr comment ${{ github.event.pull_request.number || github.event.issue.number }} --repo ${{ github.repository }} --body "<your review in GitHub markdown>"
-               Begin the body with "## 🤖 Gemini review". If there are no Critical/High
-               issues, say so briefly with at most a few optional Medium/Low notes.
+            1. Read the diff by running:  cat pr.diff
+            2. Review it against this repository's GEMINI.md standards (already
+               loaded as context). Grade findings by severity; only Critical/High
+               are blocking; keep Medium/Low short.
+            3. Output ONLY the review as GitHub-flavored markdown, beginning with
+               "## 🤖 Gemini review". If there are no Critical/High issues, say so
+               briefly with at most a few optional Medium/Low notes. Do NOT post
+               anything yourself and do NOT run any other commands.
 
             Do not comment on pure formatting, do not add filler praise, and do not
             repeat what CI already catches (lint, type checks, tests).
+
+      # Post the model's review text deterministically. The body is passed via env
+      # (not a ${{ }} expression inside run:) to avoid any shell injection.
+      - name: 'Post review comment'
+        if: ${{ steps.gemini_pr_review.outputs.summary != '' }}
+        env:
+          GH_TOKEN: '${{ steps.mint_identity_token.outputs.token || secrets.GITHUB_TOKEN || github.token }}'
+          REVIEW_BODY: '${{ steps.gemini_pr_review.outputs.summary }}'
+        run: |-
+          printf '%s' "$REVIEW_BODY" > review.md
+          gh pr comment '${{ github.event.pull_request.number || github.event.issue.number }}' \
+            --repo '${{ github.repository }}' --body-file review.md
