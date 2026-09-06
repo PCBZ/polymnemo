@@ -46,5 +46,24 @@ class Settings(BaseSettings):
     chunk_size: int = 1000
     chunk_overlap: int = 100
 
+    # --- Auth ----------------------------------------------------------------
+    # "bearer" (per-user keys, the real scheme) or "static" (dev, single user).
+    auth_backend: str = "bearer"
+    # Per-user keys as "key1:alice,key2:bob" (env POLYMNEMO_API_KEYS).
+    api_keys: str = ""
+
+    def parse_api_keys(self) -> dict[str, str]:
+        """Parse ``api_keys`` into an ``{api_key: user_id}`` map."""
+        out: dict[str, str] = {}
+        for pair in self.api_keys.split(","):
+            pair = pair.strip()
+            if not pair:
+                continue
+            key, _, user_id = pair.partition(":")
+            key, user_id = key.strip(), user_id.strip()
+            if key and user_id:
+                out[key] = user_id
+        return out
+
 
 settings = Settings()
