@@ -3,11 +3,17 @@
 Keeps everything in a dict and ranks ``search`` by cosine similarity in pure
 Python (no numpy dependency). Not durable and not concurrency-safe — the
 durable implementation is ``PostgresStore`` (#6).
+
+Namespaces are shared vs private (#14): reads in a *shared* namespace are
+visible to every user (the "born shared" collection), while any other namespace
+is private to its owner. Writes are always owner-scoped — a user can only
+update/delete their own memories, even in a shared namespace.
 """
 
 from __future__ import annotations
 
 import math
+from collections.abc import Iterable
 from dataclasses import replace
 from typing import Sequence
 
@@ -26,9 +32,15 @@ def _cosine(a: Sequence[float], b: Sequence[float]) -> float:
 
 
 class InMemoryStore:
-    def __init__(self) -> None:
+    def __init__(self, shared_namespaces: Iterable[str] = ()) -> None:
         # memory_id -> (Memory, embedding)
         self._rows: dict[str, tuple[Memory, list[float]]] = {}
+        # Namespaces whose reads are visible to every user.
+        self._shared: frozenset[str] = frozenset(shared_namespaces)
+
+    def _readable(self, mem: Memory, user_id: str) -> bool:
+        """Owner can always read; anyone can read a shared namespace."""
+        return mem.user_id == user_id or mem.namespace in self._shared
 
     def add(self, memory: Memory, embedding: Sequence[float]) -> str:
         if memory.created_at is None:
@@ -39,7 +51,7 @@ class InMemoryStore:
 
     def get(self, user_id: str, memory_id: str) -> Memory | None:
         row = self._rows.get(memory_id)
-        if row is None or row[0].user_id != user_id:
+        if row is None or not self._readable(row[0], user_id):
             return None
         return self._clone(row[0])
 
@@ -53,7 +65,7 @@ class InMemoryStore:
     ) -> list[Memory]:
         scored: list[tuple[float, Memory]] = []
         for mem, emb in self._rows.values():
-            if mem.user_id != user_id or mem.namespace != namespace:
+            if mem.namespace != namespace or not self._readable(mem, user_id):
                 continue
             scored.append((_cosine(embedding, emb), mem))
         scored.sort(key=lambda pair: pair[0], reverse=True)
@@ -74,7 +86,7 @@ class InMemoryStore:
         rows = [
             mem
             for mem, _ in self._rows.values()
-            if mem.user_id == user_id and mem.namespace == namespace
+            if mem.namespace == namespace and self._readable(mem, user_id)
         ]
         rows.sort(key=lambda m: (m.created_at or utcnow()), reverse=True)
         return [self._clone(m) for m in rows[offset : offset + limit]]
@@ -106,7 +118,7 @@ class InMemoryStore:
         return sum(
             1
             for mem, _ in self._rows.values()
-            if mem.user_id == user_id and mem.namespace == namespace
+            if mem.namespace == namespace and self._readable(mem, user_id)
         )
 
     @staticmethod

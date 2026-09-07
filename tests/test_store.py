@@ -43,6 +43,28 @@ def test_list_newest_first_and_pagination():
     assert len(store.list("alice", "shared", limit=2, offset=2)) == 1
 
 
+def test_shared_namespace_reads_across_users_but_writes_stay_owned():
+    store = InMemoryStore(shared_namespaces=["shared"])
+    m = _mem(user_id="alice", namespace="shared", content="team fact")
+    store.add(m, [1.0, 0.0])
+    # bob reads alice's shared memory
+    assert store.get("bob", m.id).content == "team fact"
+    assert store.count("bob", "shared") == 1
+    assert len(store.search("bob", "shared", [1.0, 0.0], limit=5)) == 1
+    # ...but cannot modify it (writes are owner-scoped)
+    assert store.update("bob", m.id, "x", [0.0, 0.0]) is None
+    assert store.delete("bob", m.id) is False
+
+
+def test_private_namespace_stays_isolated():
+    store = InMemoryStore(shared_namespaces=["shared"])
+    m = _mem(user_id="alice", namespace="diary", content="secret")
+    store.add(m, [1.0, 0.0])
+    assert store.get("bob", m.id) is None
+    assert store.count("bob", "diary") == 0
+    assert store.search("bob", "diary", [1.0, 0.0], limit=5) == []
+
+
 def test_update_and_delete():
     store = InMemoryStore()
     m = _mem(content="a")
