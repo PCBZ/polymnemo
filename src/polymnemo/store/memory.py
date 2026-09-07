@@ -121,6 +121,36 @@ class InMemoryStore:
             if mem.namespace == namespace and self._readable(mem, user_id)
         )
 
+    def get_session(self, user_id: str, session_id: str) -> list[Memory]:
+        rows = [
+            mem
+            for mem, _ in self._rows.values()
+            if mem.user_id == user_id and mem.session_id == session_id
+        ]
+        rows.sort(key=lambda m: (m.seq if m.seq is not None else 0))
+        return [self._clone(m) for m in rows]
+
+    def delete_session(self, user_id: str, session_id: str) -> int:
+        ids = [
+            mid
+            for mid, (mem, _) in self._rows.items()
+            if mem.user_id == user_id and mem.session_id == session_id
+        ]
+        for mid in ids:
+            del self._rows[mid]
+        return len(ids)
+
+    def replace_session(
+        self,
+        user_id: str,
+        session_id: str,
+        memories: Sequence[Memory],
+        embeddings: Sequence[Sequence[float]],
+    ) -> None:
+        self.delete_session(user_id, session_id)
+        for memory, embedding in zip(memories, embeddings):
+            self.add(memory, embedding)
+
     @staticmethod
     def _clone(mem: Memory) -> Memory:
         # Return copies so callers can't mutate stored state (e.g. setting score).

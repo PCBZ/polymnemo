@@ -45,3 +45,29 @@ def chunk_text(text: str) -> list[str]:
     if not text:
         return []
     return _splitter().chunks(text)
+
+
+@lru_cache(maxsize=1)
+def _verbatim_splitter():
+    from semantic_text_splitter import TextSplitter
+
+    if settings.embed_backend == "stub":
+        return TextSplitter(
+            settings.chunk_tokens * _CHARS_PER_TOKEN, overlap=0, trim=False
+        )
+
+    from tokenizers import Tokenizer
+
+    tokenizer = Tokenizer.from_pretrained(settings.embed_model)
+    return TextSplitter.from_huggingface_tokenizer(
+        tokenizer, capacity=settings.chunk_tokens, overlap=0, trim=False
+    )
+
+
+def chunk_verbatim(text: str) -> list[str]:
+    """Split into non-overlapping, untrimmed token-bounded chunks whose
+    concatenation reconstructs ``text`` exactly — used for saving sessions so
+    load_session round-trips losslessly (empty input -> no chunks)."""
+    if not text:
+        return []
+    return _verbatim_splitter().chunks(text)

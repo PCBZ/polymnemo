@@ -16,6 +16,8 @@ CREATE TABLE IF NOT EXISTS memories (
     embedding   VECTOR(384) NOT NULL,
     tags        TEXT[] NOT NULL DEFAULT '{}',
     source      TEXT,
+    session_id  TEXT,        -- set for chunks of a saved session (#15)
+    seq         INTEGER,     -- 0-based order within a session
     created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at  TIMESTAMPTZ NOT NULL DEFAULT now()
 );
@@ -26,6 +28,9 @@ CREATE INDEX IF NOT EXISTS memories_user_namespace_idx
     ON memories (user_id, namespace);
 CREATE INDEX IF NOT EXISTS memories_namespace_idx
     ON memories (namespace);
+-- Reassemble a session in order.
+CREATE INDEX IF NOT EXISTS memories_session_idx
+    ON memories (user_id, session_id, seq);
 
 -- Approximate nearest-neighbour on cosine distance (matches the retriever).
 CREATE INDEX IF NOT EXISTS memories_embedding_hnsw_idx

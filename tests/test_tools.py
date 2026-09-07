@@ -16,6 +16,8 @@ EXPECTED_TOOLS = {
     "get_memory",
     "update",
     "forget",
+    "save_session",
+    "load_session",
 }
 
 
@@ -68,3 +70,28 @@ async def test_memory_namespace_resource():
         data = json.loads(contents[0].text)
         assert data["total"] == 1
         assert data["items"][0]["content"] == "hello resource"
+
+
+async def test_session_tools_round_trip():
+    async with Client(server.mcp) as client:
+        content = "session line\n" * 200
+        saved = (
+            await client.call_tool(
+                "save_session", {"session_id": "s1", "content": content}
+            )
+        ).data
+        assert saved["chars"] == len(content)
+
+        loaded, page = "", 0
+        while True:
+            p = (
+                await client.call_tool(
+                    "load_session",
+                    {"session_id": "s1", "page": page, "page_size": 200},
+                )
+            ).data
+            loaded += p["content"]
+            if not p["has_more"]:
+                break
+            page += 1
+        assert loaded == content
