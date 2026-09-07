@@ -69,8 +69,14 @@ class PostgresStore:
     ) -> None:
         self._shared = list(dict.fromkeys(shared_namespaces))
         # Neon: pass the POOLED connection string. pool_pre_ping drops stale conns.
+        # prepare_threshold=None disables psycopg3 auto-prepared statements: Neon's
+        # pooled endpoint is PgBouncer in transaction mode, where a statement
+        # prepared on one backend fails (InvalidSqlStatementName) on another.
         self._engine = create_engine(
-            _sqlalchemy_url(dsn), pool_size=pool_size, pool_pre_ping=True
+            _sqlalchemy_url(dsn),
+            pool_size=pool_size,
+            pool_pre_ping=True,
+            connect_args={"prepare_threshold": None},
         )
 
     def close(self) -> None:
@@ -134,6 +140,10 @@ class PostgresStore:
         limit: int,
         offset: int = 0,
     ) -> list[Memory]:
+        # NOTE: with a selective namespace/visibility filter on top of the HNSW
+        # ANN scan, a small namespace can under-return (pgvector filters the
+        # ~hnsw.ef_search candidates after the vector order-by). Raise
+        # hnsw.ef_search or add a partial index if recall matters there.
         distance = MemoryRow.embedding.cosine_distance(list(embedding))
         stmt = (
             select(MemoryRow, (1 - distance).label("score"))

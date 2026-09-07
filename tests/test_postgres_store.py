@@ -11,7 +11,6 @@ pytestmark = pytest.mark.skipif(
 )
 
 from polymnemo.models import Memory, new_id  # noqa: E402
-from polymnemo.store.postgres import PostgresStore  # noqa: E402
 
 DIM = 384
 
@@ -29,7 +28,11 @@ def _mem(user_id="alice", namespace="shared", content="x") -> Memory:
 
 @pytest.fixture
 def store():
+    # Imported here (not at module top) so the offline suite stays importable
+    # without the postgres extra — the skipif only guards test functions.
     from sqlalchemy import text
+
+    from polymnemo.store.postgres import PostgresStore
 
     s = PostgresStore(os.environ["TEST_DATABASE_URL"], shared_namespaces=["shared"])
 

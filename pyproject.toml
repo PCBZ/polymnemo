@@ -38,9 +38,7 @@ postgres = [
 dev = [
     "pytest>=8.0",
     "pytest-asyncio>=0.24",
-    "sqlalchemy>=2.0",
-    "psycopg[binary]>=3.1",
-    "pgvector>=0.3",
+    "polymnemo[postgres]",  # single source of truth for the DB deps
 ]
 
 [project.scripts]
