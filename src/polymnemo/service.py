@@ -52,7 +52,7 @@ class MemoryService:
         """
         content = (content or "").strip()
         if not content:
-            raise ValueError("content is empty")
+            raise ValueError("content is empty — provide text to store.")
 
         ns = namespace or settings.default_namespace
         chunks = chunk_text(content)
@@ -87,7 +87,7 @@ class MemoryService:
         """
         query = (query or "").strip()
         if not query:
-            raise ValueError("query is empty")
+            raise ValueError("query is empty — provide a non-empty search string.")
 
         ns = namespace or settings.default_namespace
         limit = settings.recall_limit if limit is None else max(1, limit)
@@ -115,19 +115,25 @@ class MemoryService:
         """Fetch a single memory by id (raises if not found / not owned)."""
         memory = self.ctx.store.get(user_id, memory_id)
         if memory is None:
-            raise ValueError(f"memory not found: {memory_id}")
+            raise ValueError(
+                f"no memory with id '{memory_id}' for this user — "
+                "call list_memories to see valid ids."
+            )
         return memory.to_public()
 
     def update(self, user_id: str, memory_id: str, content: str) -> dict:
         """Replace a memory's content and re-embed it."""
         content = (content or "").strip()
         if not content:
-            raise ValueError("content is empty")
+            raise ValueError("content is empty — provide text to store.")
 
         embedding = self.ctx.embedder.embed_documents([content])[0]
         memory = self.ctx.store.update(user_id, memory_id, content, embedding)
         if memory is None:
-            raise ValueError(f"memory not found: {memory_id}")
+            raise ValueError(
+                f"no memory with id '{memory_id}' for this user — "
+                "call list_memories to see valid ids."
+            )
         return memory.to_public()
 
     def forget(self, user_id: str, memory_id: str) -> dict:

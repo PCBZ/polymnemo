@@ -1,12 +1,15 @@
-"""polymnemo MCP server — Phase 0 #1 skeleton.
+"""polymnemo MCP server.
 
-Boots a FastMCP app and serves it over **Streamable HTTP** at ``/mcp``. The only
-tool for now is ``ping`` (a connectivity check); the real memory tools
-(``remember`` / ``recall`` / ...) arrive in Phase 1.
+Boots a FastMCP app served over **Streamable HTTP** at ``/mcp`` and exposes the
+memory tools (``remember`` / ``recall`` / ``list_memories`` / ``get_memory`` /
+``update`` / ``forget``). Tools stay thin: they authenticate the caller, delegate
+to :class:`MemoryService`, and surface validation errors as actionable
+``ToolError`` messages (via ``_tool_errors``) instead of masked stack traces.
 """
 
 from __future__ import annotations
 
+import functools
 import logging
 
 from fastmcp import FastMCP
@@ -45,10 +48,27 @@ def _current_user() -> str:
     try:
         return ctx.auth.authenticate(headers)
     except AuthError as exc:
-        raise ToolError(f"Authentication failed: {exc}")
+        raise ToolError(f"Authentication failed: {exc}") from exc
 
 
-@mcp.tool
+def _tool_errors(fn):
+    """Map domain validation errors (``ValueError``) to ``ToolError`` so the
+    model receives a clear, actionable message instead of a masked internal
+    error / stack trace. ``functools.wraps`` preserves the signature FastMCP
+    reads to build the tool schema.
+    """
+
+    @functools.wraps(fn)
+    def wrapper(*args, **kwargs):
+        try:
+            return fn(*args, **kwargs)
+        except ValueError as exc:
+            raise ToolError(str(exc)) from exc
+
+    return wrapper
+
+
+@mcp.tool(annotations={"readOnlyHint": True})
 def ping() -> dict:
     """Health / connectivity check.
 
@@ -64,6 +84,7 @@ def ping() -> dict:
 
 
 @mcp.tool(annotations={"readOnlyHint": False, "destructiveHint": False})
+@_tool_errors
 def remember(
     content: str,
     namespace: str | None = None,
@@ -78,16 +99,13 @@ def remember(
 
     Returns `{ids, chunks, namespace}`.
     """
-    user_id = _current_user()
-    try:
-        return service.remember(
-            user_id, content, namespace=namespace, tags=tags, source=source
-        )
-    except ValueError as exc:
-        raise ToolError(str(exc))
+    return service.remember(
+        _current_user(), content, namespace=namespace, tags=tags, source=source
+    )
 
 
 @mcp.tool(annotations={"readOnlyHint": True})
+@_tool_errors
 def recall(
     query: str,
     namespace: str | None = None,
@@ -103,16 +121,13 @@ def recall(
 
     Returns `{items, total, has_more, next_cursor}`.
     """
-    user_id = _current_user()
-    try:
-        return service.recall(
-            user_id, query, namespace=namespace, limit=limit, cursor=cursor
-        )
-    except ValueError as exc:
-        raise ToolError(str(exc))
+    return service.recall(
+        _current_user(), query, namespace=namespace, limit=limit, cursor=cursor
+    )
 
 
 @mcp.tool(annotations={"readOnlyHint": True})
+@_tool_errors
 def list_memories(
     namespace: str | None = None,
     limit: int = 20,
@@ -123,37 +138,42 @@ def list_memories(
     `namespace` selects the collection (defaults to the shared namespace). Page
     with `next_cursor` / `has_more`. Returns `{items, total, has_more, next_cursor}`.
     """
-    user_id = _current_user()
     return service.list_memories(
-        user_id, namespace=namespace, limit=limit, cursor=cursor
+        _current_user(), namespace=namespace, limit=limit, cursor=cursor
     )
 
 
 @mcp.tool(annotations={"readOnlyHint": True})
+@_tool_errors
 def get_memory(id: str) -> dict:
-    """Fetch a single memory by its id."""
-    user_id = _current_user()
-    try:
-        return service.get_memory(user_id, id)
-    except ValueError as exc:
-        raise ToolError(str(exc))
+    """Fetch a single memory by its id (from `remember`/`recall`/`list_memories`)."""
+    return service.get_memory(_current_user(), id)
 
 
-@mcp.tool(annotations={"readOnlyHint": False, "destructiveHint": False})
+@mcp.tool(
+    annotations={
+        "readOnlyHint": False,
+        "destructiveHint": False,
+        "idempotentHint": True,
+    }
+)
+@_tool_errors
 def update(id: str, content: str) -> dict:
     """Replace a memory's content (re-embeds it). Returns the updated memory."""
-    user_id = _current_user()
-    try:
-        return service.update(user_id, id, content)
-    except ValueError as exc:
-        raise ToolError(str(exc))
+    return service.update(_current_user(), id, content)
 
 
-@mcp.tool(annotations={"readOnlyHint": False, "destructiveHint": True})
+@mcp.tool(
+    annotations={
+        "readOnlyHint": False,
+        "destructiveHint": True,
+        "idempotentHint": True,
+    }
+)
+@_tool_errors
 def forget(id: str) -> dict:
-    """Delete a memory by id. Returns `{id, deleted}`."""
-    user_id = _current_user()
-    return service.forget(user_id, id)
+    """Delete a memory by id. Returns `{id, deleted}` (deleted=false if absent)."""
+    return service.forget(_current_user(), id)
 
 
 def main() -> None:
