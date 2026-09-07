@@ -47,6 +47,25 @@ def _build_embedder() -> Embedder:
     return FastEmbedEmbedder()
 
 
+def _build_store() -> Store:
+    shared = settings.parse_shared_namespaces()
+    if settings.database_url:
+        from .store.postgres import PostgresStore
+
+        logger.info("Using PostgresStore")
+        return PostgresStore(settings.database_url, shared_namespaces=shared)
+    if settings.require_database:
+        raise RuntimeError(
+            "POLYMNEMO_DATABASE_URL is not set but POLYMNEMO_REQUIRE_DATABASE=true. "
+            "Provide the database (Neon pooled) connection string."
+        )
+    logger.warning(
+        "No POLYMNEMO_DATABASE_URL -> using InMemoryStore (dev/test only; "
+        "NOT durable and NOT shared across instances)."
+    )
+    return InMemoryStore(shared_namespaces=shared)
+
+
 def _build_auth() -> Auth:
     if settings.auth_backend == "static":
         return StaticAuth()
@@ -60,9 +79,7 @@ def _build_auth() -> Auth:
 
 
 def build_context() -> AppContext:
-    # Phase 0 dev defaults. As real implementations land, select here (e.g. by
-    # settings.database_url for the store) instead of the in-memory one.
-    store: Store = InMemoryStore(shared_namespaces=settings.parse_shared_namespaces())
+    store: Store = _build_store()
     embedder: Embedder = _build_embedder()
     retriever: Retriever = VectorRetriever(store=store, embedder=embedder)
     auth: Auth = _build_auth()
