@@ -1,0 +1,56 @@
+"""Tool-contract tests: an MCP client (as an LLM would) calls the tools over
+FastMCP's in-memory transport. Static auth is active (see conftest), so no
+bearer header is needed in-process."""
+
+import pytest
+from fastmcp import Client
+from fastmcp.exceptions import ToolError
+
+from polymnemo import server
+
+EXPECTED_TOOLS = {
+    "ping",
+    "remember",
+    "recall",
+    "list_memories",
+    "get_memory",
+    "update",
+    "forget",
+}
+
+
+@pytest.fixture(autouse=True)
+def _isolate_store():
+    """Each test starts from an empty in-memory store."""
+    server.ctx.store._rows.clear()
+    yield
+    server.ctx.store._rows.clear()
+
+
+async def test_tool_surface_and_annotations():
+    async with Client(server.mcp) as client:
+        tools = {t.name: t for t in await client.list_tools()}
+        assert EXPECTED_TOOLS <= set(tools)
+        assert tools["recall"].annotations.read_only_hint is True
+        assert tools["remember"].annotations.read_only_hint is False
+        assert tools["forget"].annotations.destructive_hint is True
+
+
+async def test_remember_recall_roundtrip():
+    async with Client(server.mcp) as client:
+        rid = (await client.call_tool("remember", {"content": "hello world"})).data[
+            "ids"
+        ][0]
+        assert (await client.call_tool("list_memories", {})).data["total"] == 1
+        got = (await client.call_tool("get_memory", {"id": rid})).data
+        assert got["content"] == "hello world"
+        recalled = (await client.call_tool("recall", {"query": "hello"})).data
+        assert recalled["total"] == 1
+        assert (await client.call_tool("forget", {"id": rid})).data["deleted"] is True
+
+
+async def test_actionable_error_reaches_client():
+    async with Client(server.mcp) as client:
+        with pytest.raises(ToolError) as excinfo:
+            await client.call_tool("recall", {"query": "   "})
+        assert "query is empty" in str(excinfo.value)
