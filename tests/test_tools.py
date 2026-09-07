@@ -54,3 +54,17 @@ async def test_actionable_error_reaches_client():
         with pytest.raises(ToolError) as excinfo:
             await client.call_tool("recall", {"query": "   "})
         assert "query is empty" in str(excinfo.value)
+
+
+async def test_memory_namespace_resource():
+    import json
+
+    async with Client(server.mcp) as client:
+        templates = {t.uri_template for t in await client.list_resource_templates()}
+        assert "memory://{namespace}" in templates
+
+        await client.call_tool("remember", {"content": "hello resource"})
+        contents = await client.read_resource("memory://shared")
+        data = json.loads(contents[0].text)
+        assert data["total"] == 1
+        assert data["items"][0]["content"] == "hello resource"
