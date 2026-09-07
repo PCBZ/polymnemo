@@ -112,6 +112,50 @@ def recall(
         raise ToolError(str(exc))
 
 
+@mcp.tool(annotations={"readOnlyHint": True})
+def list_memories(
+    namespace: str | None = None,
+    limit: int = 20,
+    cursor: str | None = None,
+) -> dict:
+    """List stored memories newest-first (no search query).
+
+    `namespace` selects the collection (defaults to the shared namespace). Page
+    with `next_cursor` / `has_more`. Returns `{items, total, has_more, next_cursor}`.
+    """
+    user_id = _current_user()
+    return service.list_memories(
+        user_id, namespace=namespace, limit=limit, cursor=cursor
+    )
+
+
+@mcp.tool(annotations={"readOnlyHint": True})
+def get_memory(id: str) -> dict:
+    """Fetch a single memory by its id."""
+    user_id = _current_user()
+    try:
+        return service.get_memory(user_id, id)
+    except ValueError as exc:
+        raise ToolError(str(exc))
+
+
+@mcp.tool(annotations={"readOnlyHint": False, "destructiveHint": False})
+def update(id: str, content: str) -> dict:
+    """Replace a memory's content (re-embeds it). Returns the updated memory."""
+    user_id = _current_user()
+    try:
+        return service.update(user_id, id, content)
+    except ValueError as exc:
+        raise ToolError(str(exc))
+
+
+@mcp.tool(annotations={"readOnlyHint": False, "destructiveHint": True})
+def forget(id: str) -> dict:
+    """Delete a memory by id. Returns `{id, deleted}`."""
+    user_id = _current_user()
+    return service.forget(user_id, id)
+
+
 def main() -> None:
     """Console-script entry point: run the server over Streamable HTTP."""
     logging.basicConfig(
