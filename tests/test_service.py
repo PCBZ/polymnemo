@@ -28,15 +28,30 @@ def test_recall_pagination(service):
 
 
 def test_crud_and_tenant_isolation(service):
-    mid = service.remember("alice", "hello")["ids"][0]
+    # A private namespace (not in shared_namespaces) is owner-only.
+    mid = service.remember("alice", "hello", namespace="alice-private")["ids"][0]
     assert service.get_memory("alice", mid)["content"] == "hello"
     assert service.update("alice", mid, "hi")["content"] == "hi"
 
     with pytest.raises(ValueError):
-        service.get_memory("bob", mid)  # another user cannot read it
+        service.get_memory("bob", mid)  # private ns -> not visible to bob
 
     assert service.forget("alice", mid) == {"id": mid, "deleted": True}
     assert service.forget("alice", mid)["deleted"] is False
+
+
+def test_shared_namespace_is_cross_user(service):
+    # Default namespace "shared" is readable by everyone ("born shared").
+    service.remember("alice", "toyota oil change", namespace="shared")
+    assert service.list_memories("bob", namespace="shared")["total"] == 1
+    assert service.recall("bob", "oil change", namespace="shared")["total"] == 1
+
+
+def test_private_namespace_is_isolated(service):
+    service.remember("alice", "secret diary entry", namespace="diary")
+    assert service.list_memories("bob", namespace="diary")["total"] == 0
+    assert service.recall("bob", "diary", namespace="diary")["total"] == 0
+    assert service.list_memories("alice", namespace="diary")["total"] == 1  # owner sees it
 
 
 def test_empty_inputs_raise(service):

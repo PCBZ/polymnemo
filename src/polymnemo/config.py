@@ -49,8 +49,15 @@ class Settings(BaseSettings):
     chunk_overlap_tokens: int = 20
 
     # --- Namespaces ----------------------------------------------------------
-    # Default collection when a tool call omits one (shared vs private is #14).
+    # Default collection when a tool call omits one.
     default_namespace: str = "shared"
+    # Comma-separated namespaces whose reads are visible to every user ("born
+    # shared"); any other namespace is private to its owner. Writes are always
+    # owner-scoped.
+    shared_namespaces: str = "shared"
+
+    def parse_shared_namespaces(self) -> frozenset[str]:
+        return frozenset(n.strip() for n in self.shared_namespaces.split(",") if n.strip())
 
     # --- Recall / list -------------------------------------------------------
     # Default page sizes; the client decides whether to page further.

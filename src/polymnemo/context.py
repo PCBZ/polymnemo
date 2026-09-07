@@ -62,7 +62,7 @@ def _build_auth() -> Auth:
 def build_context() -> AppContext:
     # Phase 0 dev defaults. As real implementations land, select here (e.g. by
     # settings.database_url for the store) instead of the in-memory one.
-    store: Store = InMemoryStore()
+    store: Store = InMemoryStore(shared_namespaces=settings.parse_shared_namespaces())
     embedder: Embedder = _build_embedder()
     retriever: Retriever = VectorRetriever(store=store, embedder=embedder)
     auth: Auth = _build_auth()
