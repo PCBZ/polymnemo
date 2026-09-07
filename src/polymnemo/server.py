@@ -176,6 +176,15 @@ def forget(id: str) -> dict:
     return service.forget(_current_user(), id)
 
 
+@mcp.resource("memory://{namespace}")
+def namespace_collection(namespace: str) -> dict:
+    """A namespace's memories, for the authenticated user, so a client can
+    auto-inject the collection. Bounded like `list_memories`; page further with
+    that tool. Returns `{items, total, has_more, next_cursor}`.
+    """
+    return service.list_memories(_current_user(), namespace=namespace)
+
+
 def main() -> None:
     """Console-script entry point: run the server over Streamable HTTP."""
     logging.basicConfig(
