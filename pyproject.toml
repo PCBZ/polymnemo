@@ -29,9 +29,18 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+# Durable store (Neon + pgvector). Imported lazily by PostgresStore.
+postgres = [
+    "sqlalchemy>=2.0",
+    "psycopg[binary]>=3.1",
+    "pgvector>=0.3",
+]
 dev = [
     "pytest>=8.0",
     "pytest-asyncio>=0.24",
+    "sqlalchemy>=2.0",
+    "psycopg[binary]>=3.1",
+    "pgvector>=0.3",
 ]
 
 [project.scripts]

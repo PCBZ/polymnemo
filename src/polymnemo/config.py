@@ -29,6 +29,18 @@ class Settings(BaseSettings):
     port: int = Field(8000, validation_alias=AliasChoices("POLYMNEMO_PORT", "PORT"))
     mcp_path: str = "/mcp"
 
+    # --- Storage -------------------------------------------------------------
+    # When set, the Postgres (Neon + pgvector) store is used; otherwise the
+    # in-memory store (dev/tests). On Neon use the POOLED connection string
+    # (PgBouncer) so Cloud Run's short-lived connections don't exhaust the DB.
+    database_url: str | None = Field(
+        None, validation_alias=AliasChoices("POLYMNEMO_DATABASE_URL", "DATABASE_URL")
+    )
+    # Fail fast instead of silently using the in-memory store when no database_url
+    # is set. Enabled in the production image so a misconfigured deploy doesn't
+    # quietly lose memories.
+    require_database: bool = False
+
     # --- Embeddings ----------------------------------------------------------
     # A multilingual model keeps Chinese / cross-language recall working out of
     # the box. The dimension is pinned here (and, later, into the DB schema), so
