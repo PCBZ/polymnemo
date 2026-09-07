@@ -147,9 +147,25 @@ class InMemoryStore:
         memories: Sequence[Memory],
         embeddings: Sequence[Sequence[float]],
     ) -> None:
-        self.delete_session(user_id, session_id)
+        # Atomic per the Store contract: build the new rows fully, then swap.
+        # If anything fails while building, the old session is left untouched;
+        # the swap itself is only failure-proof dict ops (delete + update).
+        now = utcnow()
+        new_rows: dict[str, tuple[Memory, list[float]]] = {}
         for memory, embedding in zip(memories, embeddings):
-            self.add(memory, embedding)
+            if memory.created_at is None:
+                memory.created_at = now
+            memory.updated_at = memory.created_at
+            new_rows[memory.id] = (memory, list(embedding))
+
+        stale = [
+            mid
+            for mid, (mem, _) in self._rows.items()
+            if mem.user_id == user_id and mem.session_id == session_id
+        ]
+        for mid in stale:
+            del self._rows[mid]
+        self._rows.update(new_rows)
 
     @staticmethod
     def _clone(mem: Memory) -> Memory:

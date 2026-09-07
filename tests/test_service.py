@@ -85,6 +85,18 @@ def test_session_round_trip_is_lossless(service):
     assert reassembled == content  # exact round-trip across pages
 
 
+def test_saved_session_is_private_not_shared(service):
+    # A session is a full verbatim transcript. It must NOT default into a shared
+    # namespace, or its content would be world-readable via recall / list.
+    service.save_session("alice", "s", "top secret transcript " * 20)
+
+    assert service.list_memories("bob", namespace="shared")["total"] == 0
+    assert service.recall("bob", "secret", namespace="shared")["total"] == 0
+    assert service.list_memories("alice", namespace="shared")["total"] == 0
+    # the owner still gets it back — load_session is keyed by user + session id
+    assert "secret" in service.load_session("alice", "s")["content"]
+
+
 def test_save_session_replaces(service):
     service.save_session("alice", "s", "first version")
     service.save_session("alice", "s", "second version")

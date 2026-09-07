@@ -20,23 +20,41 @@ _CHARS_PER_TOKEN = 4
 
 
 @lru_cache(maxsize=1)
-def _splitter():
+def _tokenizer():
+    """Load the model's HF tokenizer once, shared by every splitter."""
+    from tokenizers import Tokenizer
+
+    return Tokenizer.from_pretrained(settings.embed_model)
+
+
+def _build_splitter(*, overlap: int, trim: bool):
+    """Build a TextSplitter for the active backend.
+
+    Real backend: token-bounded via the shared model tokenizer. Stub backend
+    (offline dev/tests): a character splitter approximating tokens by ``_CHARS_PER_TOKEN``.
+    """
     from semantic_text_splitter import TextSplitter
 
     if settings.embed_backend == "stub":
         return TextSplitter(
             settings.chunk_tokens * _CHARS_PER_TOKEN,
-            overlap=settings.chunk_overlap_tokens * _CHARS_PER_TOKEN,
+            overlap=overlap * _CHARS_PER_TOKEN,
+            trim=trim,
         )
 
-    from tokenizers import Tokenizer
-
-    tokenizer = Tokenizer.from_pretrained(settings.embed_model)
     return TextSplitter.from_huggingface_tokenizer(
-        tokenizer,
+        _tokenizer(),
         capacity=settings.chunk_tokens,
-        overlap=settings.chunk_overlap_tokens,
+        overlap=overlap,
+        trim=trim,
     )
+
+
+@lru_cache(maxsize=1)
+def _splitter():
+    # Recall-oriented: overlap so a boundary phrase stays searchable; trim
+    # whitespace at cut points for cleaner embeddings.
+    return _build_splitter(overlap=settings.chunk_overlap_tokens, trim=True)
 
 
 def chunk_text(text: str) -> list[str]:
@@ -49,19 +67,9 @@ def chunk_text(text: str) -> list[str]:
 
 @lru_cache(maxsize=1)
 def _verbatim_splitter():
-    from semantic_text_splitter import TextSplitter
-
-    if settings.embed_backend == "stub":
-        return TextSplitter(
-            settings.chunk_tokens * _CHARS_PER_TOKEN, overlap=0, trim=False
-        )
-
-    from tokenizers import Tokenizer
-
-    tokenizer = Tokenizer.from_pretrained(settings.embed_model)
-    return TextSplitter.from_huggingface_tokenizer(
-        tokenizer, capacity=settings.chunk_tokens, overlap=0, trim=False
-    )
+    # Lossless: no overlap and no trimming, so concatenating chunks reproduces
+    # the input byte-for-byte.
+    return _build_splitter(overlap=0, trim=False)
 
 
 def chunk_verbatim(text: str) -> list[str]:

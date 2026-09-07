@@ -154,7 +154,10 @@ class MemoryService:
         if not content:
             raise ValueError("content is empty — nothing to save.")
 
-        ns = namespace or settings.default_namespace
+        # A session is a full verbatim transcript; default it to the PRIVATE
+        # session namespace (not settings.default_namespace, which is "shared")
+        # so its chunks aren't world-readable via recall / get_memory / memory://.
+        ns = namespace or settings.session_namespace
 
         # Chunk + embed BEFORE touching the store: if embedding fails, the old
         # session is left untouched. The store then swaps old->new atomically.
@@ -183,20 +186,36 @@ class MemoryService:
     def load_session(
         self, user_id: str, session_id: str, page: int = 0, page_size: int = 8000
     ) -> dict:
-        """Reassemble a saved session and return one character page of it."""
+        """Reassemble a saved session and return one character page of it.
+
+        Chunks are verbatim and stored in ``seq`` order, so page N maps to the
+        character window ``[page*page_size, +page_size)``. We walk the chunks and
+        slice only the parts that overlap that window instead of joining (and
+        holding) the whole transcript on every call — memory stays O(page_size).
+        """
         page = max(0, page)
         page_size = max(1, page_size)
+        start = page * page_size
+        end = start + page_size
 
         rows = self.ctx.store.get_session(user_id, session_id)
-        full = "".join(row.content for row in rows)
 
-        start = page * page_size
-        chunk = full[start : start + page_size]
+        pos = 0  # running character offset across chunks
+        parts: list[str] = []
+        for row in rows:
+            chunk_start, chunk_end = pos, pos + len(row.content)
+            pos = chunk_end
+            if chunk_end > start and chunk_start < end:  # overlaps the window
+                lo = max(0, start - chunk_start)
+                hi = min(len(row.content), end - chunk_start)
+                parts.append(row.content[lo:hi])
+        content = "".join(parts)
+
         return {
             "session_id": session_id,
-            "content": chunk,
+            "content": content,
             "page": page,
             "page_size": page_size,
-            "total_chars": len(full),
-            "has_more": start + len(chunk) < len(full),
+            "total_chars": pos,
+            "has_more": start + len(content) < pos,
         }
