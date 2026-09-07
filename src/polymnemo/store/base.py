@@ -65,3 +65,22 @@ class Store(Protocol):
     def count(self, user_id: str, namespace: str) -> int:
         """Total memories for ``user_id`` in ``namespace``."""
         ...
+
+    def get_session(self, user_id: str, session_id: str) -> list[Memory]:
+        """A session's chunks for ``user_id``, ordered by ``seq`` (#15)."""
+        ...
+
+    def delete_session(self, user_id: str, session_id: str) -> int:
+        """Delete a session's chunks; return how many were removed."""
+        ...
+
+    def replace_session(
+        self,
+        user_id: str,
+        session_id: str,
+        memories: Sequence[Memory],
+        embeddings: Sequence[Sequence[float]],
+    ) -> None:
+        """Atomically replace a session's chunks (delete old, insert new) so a
+        failure can never leave the session half-written or lost."""
+        ...

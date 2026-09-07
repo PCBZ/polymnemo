@@ -176,6 +176,35 @@ def forget(id: str) -> dict:
     return service.forget(_current_user(), id)
 
 
+@mcp.tool(annotations={"readOnlyHint": False, "destructiveHint": False})
+@_tool_errors
+def save_session(
+    session_id: str, content: str, namespace: str | None = None
+) -> dict:
+    """Persist a session's full content under `session_id` for later reload.
+
+    Content is stored as ordered, losslessly-reassemblable chunks (also embedded,
+    so it's searchable via `recall`). Re-saving the same `session_id` replaces it.
+    Returns `{session_id, chunks, chars, namespace}`.
+    """
+    return service.save_session(
+        _current_user(), session_id, content, namespace=namespace
+    )
+
+
+@mcp.tool(annotations={"readOnlyHint": True})
+@_tool_errors
+def load_session(session_id: str, page: int = 0, page_size: int = 8000) -> dict:
+    """Reload a saved session's content, one character page at a time.
+
+    Page with `page` (0-based) while `has_more` is true. Returns
+    `{session_id, content, page, page_size, total_chars, has_more}`.
+    """
+    return service.load_session(
+        _current_user(), session_id, page=page, page_size=page_size
+    )
+
+
 @mcp.resource("memory://{namespace}")
 def namespace_collection(namespace: str) -> dict:
     """A namespace's memories, for the authenticated user, so a client can

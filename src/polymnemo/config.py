@@ -67,6 +67,10 @@ class Settings(BaseSettings):
     # shared"); any other namespace is private to its owner. Writes are always
     # owner-scoped.
     shared_namespaces: str = "shared"
+    # Namespace saved sessions land in when a tool omits one. Kept out of
+    # shared_namespaces so a session (a full transcript) stays private to its
+    # owner — otherwise its verbatim chunks would be world-readable via recall.
+    session_namespace: str = "sessions"
 
     def parse_shared_namespaces(self) -> frozenset[str]:
         return frozenset(n.strip() for n in self.shared_namespaces.split(",") if n.strip())

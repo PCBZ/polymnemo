@@ -12,6 +12,8 @@ lazily by ``context`` only when a database is configured — the base install
 (in-memory only) never touches it. Install the ``postgres`` extra to use it.
 """
 
+from __future__ import annotations
+
 from collections.abc import Iterable, Sequence
 from datetime import datetime
 
@@ -37,6 +39,8 @@ class MemoryRow(Base):
     embedding: Mapped[list[float]] = mapped_column(Vector(settings.embed_dim))
     tags: Mapped[list[str]] = mapped_column(ARRAY(Text), default=list)
     source: Mapped[str | None] = mapped_column(default=None)
+    session_id: Mapped[str | None] = mapped_column(default=None, index=True)
+    seq: Mapped[int | None] = mapped_column(default=None)
     created_at: Mapped[datetime] = mapped_column(server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(server_default=func.now())
 
@@ -48,6 +52,8 @@ class MemoryRow(Base):
             content=self.content,
             tags=list(self.tags or []),
             source=self.source,
+            session_id=self.session_id,
+            seq=self.seq,
             created_at=self.created_at,
             updated_at=self.updated_at,
             score=score,
@@ -98,6 +104,8 @@ class PostgresStore:
                     embedding=list(embedding),
                     tags=list(memory.tags),
                     source=memory.source,
+                    session_id=memory.session_id,
+                    seq=memory.seq,
                 )
             )
         return memory.id
@@ -179,3 +187,49 @@ class PostgresStore:
         )
         with Session(self._engine) as session:
             return session.execute(stmt).scalar_one()
+
+    def get_session(self, user_id: str, session_id: str) -> list[Memory]:
+        stmt = (
+            select(MemoryRow)
+            .where(MemoryRow.user_id == user_id, MemoryRow.session_id == session_id)
+            .order_by(MemoryRow.seq)
+        )
+        with Session(self._engine) as session:
+            return [row.to_memory() for row in session.execute(stmt).scalars()]
+
+    def delete_session(self, user_id: str, session_id: str) -> int:
+        stmt = delete(MemoryRow).where(
+            MemoryRow.user_id == user_id, MemoryRow.session_id == session_id
+        )
+        with Session(self._engine) as session, session.begin():
+            return session.execute(stmt).rowcount
+
+    def replace_session(
+        self,
+        user_id: str,
+        session_id: str,
+        memories: Sequence[Memory],
+        embeddings: Sequence[Sequence[float]],
+    ) -> None:
+        # One transaction: delete old + insert new is all-or-nothing.
+        with Session(self._engine) as session, session.begin():
+            session.execute(
+                delete(MemoryRow).where(
+                    MemoryRow.user_id == user_id,
+                    MemoryRow.session_id == session_id,
+                )
+            )
+            session.add_all(
+                MemoryRow(
+                    id=memory.id,
+                    user_id=memory.user_id,
+                    namespace=memory.namespace,
+                    content=memory.content,
+                    embedding=list(embedding),
+                    tags=list(memory.tags),
+                    source=memory.source,
+                    session_id=memory.session_id,
+                    seq=memory.seq,
+                )
+                for memory, embedding in zip(memories, embeddings)
+            )

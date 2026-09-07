@@ -67,3 +67,67 @@ def test_parse_offset():
     assert _parse_offset("5") == 5
     assert _parse_offset("-3") == 0  # clamped
     assert _parse_offset("garbage") == 0
+
+
+def test_session_round_trip_is_lossless(service):
+    content = "Line one.\n\n  Indented two.\tTab.\nThree 中文内容。\n" * 60
+    r = service.save_session("alice", "sess1", content)
+    assert r["chunks"] >= 1
+    assert r["chars"] == len(content)
+
+    reassembled, page = "", 0
+    while True:
+        p = service.load_session("alice", "sess1", page=page, page_size=100)
+        reassembled += p["content"]
+        if not p["has_more"]:
+            break
+        page += 1
+    assert reassembled == content  # exact round-trip across pages
+
+
+def test_saved_session_is_private_not_shared(service):
+    # A session is a full verbatim transcript. It must NOT default into a shared
+    # namespace, or its content would be world-readable via recall / list.
+    service.save_session("alice", "s", "top secret transcript " * 20)
+
+    assert service.list_memories("bob", namespace="shared")["total"] == 0
+    assert service.recall("bob", "secret", namespace="shared")["total"] == 0
+    assert service.list_memories("alice", namespace="shared")["total"] == 0
+    # the owner still gets it back — load_session is keyed by user + session id
+    assert "secret" in service.load_session("alice", "s")["content"]
+
+
+def test_save_session_replaces(service):
+    service.save_session("alice", "s", "first version")
+    service.save_session("alice", "s", "second version")
+    p = service.load_session("alice", "s")
+    assert p["content"] == "second version"
+    assert p["total_chars"] == len("second version")
+
+
+def test_session_is_user_scoped(service):
+    service.save_session("alice", "s", "alice content")
+    p = service.load_session("bob", "s")  # bob has no session "s"
+    assert p["total_chars"] == 0
+    assert p["content"] == ""
+
+
+def test_save_session_rejects_empty(service):
+    with pytest.raises(ValueError):
+        service.save_session("alice", "  ", "x")
+    with pytest.raises(ValueError):
+        service.save_session("alice", "s", "")
+
+
+def test_failed_save_preserves_old_session(service, monkeypatch):
+    service.save_session("alice", "s", "original content")
+
+    def boom(*args, **kwargs):
+        raise RuntimeError("embedding failed")
+
+    monkeypatch.setattr(service.ctx.embedder, "embed_documents", boom)
+    with pytest.raises(RuntimeError):
+        service.save_session("alice", "s", "new content that never lands")
+
+    # embedding failed before any store mutation -> old session intact
+    assert service.load_session("alice", "s")["content"] == "original content"

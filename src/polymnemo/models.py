@@ -27,6 +27,10 @@ class Memory:
     content: str
     tags: list[str] = field(default_factory=list)
     source: str | None = None
+    # Set when this memory is a chunk of a saved session (#15): the session it
+    # belongs to and its 0-based order, so a session can be reassembled exactly.
+    session_id: str | None = None
+    seq: int | None = None
     created_at: datetime | None = None
     updated_at: datetime | None = None
     # Populated only on search results (cosine similarity; higher = closer).

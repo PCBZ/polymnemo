@@ -78,6 +78,52 @@ def test_update_delete_owner_only(store):
     assert store.delete("alice", m.id) is True
 
 
+def test_session_ordered_scoped_and_replaceable(store):
+    def add_chunk(session_id, seq, content, user_id="alice"):
+        m = Memory(
+            id=new_id(),
+            user_id=user_id,
+            namespace="shared",
+            content=content,
+            session_id=session_id,
+            seq=seq,
+        )
+        store.add(m, _vec((0, 1.0)))
+
+    add_chunk("s", 1, "world")
+    add_chunk("s", 0, "hello ")
+    rows = store.get_session("alice", "s")
+    assert [r.content for r in rows] == ["hello ", "world"]  # ordered by seq
+    assert store.get_session("bob", "s") == []  # user-scoped
+    assert store.delete_session("alice", "s") == 2
+    assert store.get_session("alice", "s") == []
+
+
+def test_replace_session_swaps_whole_session(store):
+    def session(*contents):
+        return [
+            Memory(
+                id=new_id(),
+                user_id="alice",
+                namespace="sessions",
+                content=c,
+                session_id="s",
+                seq=i,
+            )
+            for i, c in enumerate(contents)
+        ]
+
+    old = session("old-0 ", "old-1")
+    store.replace_session("alice", "s", old, [_vec((0, 1.0))] * len(old))
+    assert [r.content for r in store.get_session("alice", "s")] == ["old-0 ", "old-1"]
+
+    # replacing with fewer/more chunks leaves no stragglers from the old set
+    new = session("new-0 ", "new-1 ", "new-2")
+    store.replace_session("alice", "s", new, [_vec((0, 1.0))] * len(new))
+    rows = store.get_session("alice", "s")
+    assert [r.content for r in rows] == ["new-0 ", "new-1 ", "new-2"]
+
+
 def test_shared_vs_private(store):
     shared = _mem(user_id="alice", namespace="shared", content="team fact")
     private = _mem(user_id="alice", namespace="diary", content="secret")

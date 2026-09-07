@@ -8,7 +8,7 @@ transport concerns and is easy to test.
 
 from __future__ import annotations
 
-from .chunking import chunk_text
+from .chunking import chunk_text, chunk_verbatim
 from .config import settings
 from .context import AppContext
 from .models import Memory, new_id
@@ -140,3 +140,82 @@ class MemoryService:
         """Delete a memory; report whether a row was removed."""
         deleted = self.ctx.store.delete(user_id, memory_id)
         return {"id": memory_id, "deleted": deleted}
+
+    def save_session(
+        self, user_id: str, session_id: str, content: str, namespace: str | None = None
+    ) -> dict:
+        """Persist a session's content as ordered, verbatim (losslessly
+        reassemblable) chunks — each embedded, so it's recall-able too. Replaces
+        any existing content for the same ``session_id``.
+        """
+        session_id = (session_id or "").strip()
+        if not session_id:
+            raise ValueError("session_id is empty.")
+        if not content:
+            raise ValueError("content is empty — nothing to save.")
+
+        # A session is a full verbatim transcript; default it to the PRIVATE
+        # session namespace (not settings.default_namespace, which is "shared")
+        # so its chunks aren't world-readable via recall / get_memory / memory://.
+        ns = namespace or settings.session_namespace
+
+        # Chunk + embed BEFORE touching the store: if embedding fails, the old
+        # session is left untouched. The store then swaps old->new atomically.
+        chunks = chunk_verbatim(content)
+        embeddings = self.ctx.embedder.embed_documents(chunks)
+        memories = [
+            Memory(
+                id=new_id(),
+                user_id=user_id,
+                namespace=ns,
+                content=chunk,
+                session_id=session_id,
+                seq=seq,
+            )
+            for seq, chunk in enumerate(chunks)
+        ]
+        self.ctx.store.replace_session(user_id, session_id, memories, embeddings)
+
+        return {
+            "session_id": session_id,
+            "chunks": len(chunks),
+            "chars": len(content),
+            "namespace": ns,
+        }
+
+    def load_session(
+        self, user_id: str, session_id: str, page: int = 0, page_size: int = 8000
+    ) -> dict:
+        """Reassemble a saved session and return one character page of it.
+
+        Chunks are verbatim and stored in ``seq`` order, so page N maps to the
+        character window ``[page*page_size, +page_size)``. We walk the chunks and
+        slice only the parts that overlap that window instead of joining (and
+        holding) the whole transcript on every call — memory stays O(page_size).
+        """
+        page = max(0, page)
+        page_size = max(1, page_size)
+        start = page * page_size
+        end = start + page_size
+
+        rows = self.ctx.store.get_session(user_id, session_id)
+
+        pos = 0  # running character offset across chunks
+        parts: list[str] = []
+        for row in rows:
+            chunk_start, chunk_end = pos, pos + len(row.content)
+            pos = chunk_end
+            if chunk_end > start and chunk_start < end:  # overlaps the window
+                lo = max(0, start - chunk_start)
+                hi = min(len(row.content), end - chunk_start)
+                parts.append(row.content[lo:hi])
+        content = "".join(parts)
+
+        return {
+            "session_id": session_id,
+            "content": content,
+            "page": page,
+            "page_size": page_size,
+            "total_chars": pos,
+            "has_more": start + len(content) < pos,
+        }
