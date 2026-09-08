@@ -18,6 +18,7 @@ from dataclasses import dataclass
 from .auth import Auth, BearerKeyAuth, StaticAuth
 from .config import settings
 from .embedding import Embedder, FastEmbedEmbedder, StubEmbedder
+from .ratelimit import GlobalRateLimiter
 from .retriever import Retriever, VectorRetriever
 from .store import InMemoryStore, Store
 
@@ -30,6 +31,7 @@ class AppContext:
     store: Store
     embedder: Embedder
     retriever: Retriever
+    rate_limiter: GlobalRateLimiter | None
 
     def describe(self) -> dict[str, str]:
         """Names of the active implementations (for diagnostics / ``ping``)."""
@@ -38,6 +40,7 @@ class AppContext:
             "store": type(self.store).__name__,
             "embedder": type(self.embedder).__name__,
             "retriever": type(self.retriever).__name__,
+            "rate_limiter": type(self.rate_limiter).__name__ if self.rate_limiter else "disabled",
         }
 
 
@@ -78,9 +81,22 @@ def _build_auth() -> Auth:
     return BearerKeyAuth(keys)
 
 
+def _build_rate_limiter() -> GlobalRateLimiter | None:
+    if not settings.ratelimit_enabled:
+        return None
+    return GlobalRateLimiter(settings.ratelimit_per_min)
+
+
 def build_context() -> AppContext:
     store: Store = _build_store()
     embedder: Embedder = _build_embedder()
     retriever: Retriever = VectorRetriever(store=store, embedder=embedder)
     auth: Auth = _build_auth()
-    return AppContext(auth=auth, store=store, embedder=embedder, retriever=retriever)
+    rate_limiter: GlobalRateLimiter | None = _build_rate_limiter()
+    return AppContext(
+        auth=auth,
+        store=store,
+        embedder=embedder,
+        retriever=retriever,
+        rate_limiter=rate_limiter,
+    )
