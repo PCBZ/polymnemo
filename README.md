@@ -138,6 +138,12 @@ pytest                               # fast, offline (stub embedder, in-memory s
 
 Postgres tests run when `TEST_DATABASE_URL` points at a pgvector Postgres.
 
+## Deploy
+
+polymnemo is stateless (all state in Neon) and deploys to Google Cloud Run with
+scale-to-zero. Infrastructure is defined as Terraform in
+[`deploy/terraform/`](deploy/terraform) (usage is in `main.tf`).
+
 ## License
 
 MIT — see [LICENSE](LICENSE).
