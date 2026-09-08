@@ -1,0 +1,75 @@
+name: Publish to MCP Registry
+
+# Publishes server.json to the official MCP Registry via GitHub OIDC — no browser
+# login, no stored secret. The workflow's OIDC token proves this repo owns the
+# io.github.PCBZ/* namespace, so `mcp-publisher login github-oidc` just works.
+#
+# On a release tag (v*) it syncs server.json first — the URL from the MCP_ENDPOINT
+# repo variable (set automatically by `terraform apply`, see deploy/terraform/gcp),
+# the version from the tag — commits that change back to main, then publishes.
+# No-ops until MCP_ENDPOINT is set (i.e. until a public instance is deployed).
+
+on:
+  workflow_dispatch: {}
+  push:
+    tags: ["v*"]
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write # OIDC token to authenticate to the registry
+      contents: write # push the synced server.json back to main
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main # edit + push server.json on the default branch
+
+      - name: Endpoint known?
+        id: check
+        env:
+          MCP_ENDPOINT: ${{ vars.MCP_ENDPOINT }}
+        run: |
+          if [ -z "$MCP_ENDPOINT" ]; then
+            echo "::notice::MCP_ENDPOINT is empty — deploy a public instance first (terraform sets it). Skipping."
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Sync server.json (url from deploy, version from tag)
+        if: steps.check.outputs.ready == 'true'
+        env:
+          MCP_ENDPOINT: ${{ vars.MCP_ENDPOINT }}
+        run: |
+          if [ "${{ github.ref_type }}" = "tag" ]; then
+            jq --arg url "$MCP_ENDPOINT" --arg v "${GITHUB_REF_NAME#v}" \
+               '.remotes[0].url = $url | .version = $v' server.json > server.json.tmp
+          else
+            jq --arg url "$MCP_ENDPOINT" '.remotes[0].url = $url' server.json > server.json.tmp
+          fi
+          mv server.json.tmp server.json
+
+      - name: Commit + push if server.json changed
+        if: steps.check.outputs.ready == 'true'
+        run: |
+          if ! git diff --quiet -- server.json; then
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git add server.json
+            git commit -m "chore(registry): sync server.json (${GITHUB_REF_NAME})"
+            git push origin HEAD:main
+          fi
+
+      - name: Install mcp-publisher
+        if: steps.check.outputs.ready == 'true'
+        run: |
+          curl -L "https://github.com/modelcontextprotocol/registry/releases/latest/download/mcp-publisher_$(uname -s | tr '[:upper:]' '[:lower:]')_$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/').tar.gz" | tar xz mcp-publisher
+
+      - name: Authenticate (GitHub OIDC)
+        if: steps.check.outputs.ready == 'true'
+        run: ./mcp-publisher login github-oidc
+
+      - name: Publish server.json
+        if: steps.check.outputs.ready == 'true'
+        run: ./mcp-publisher publish

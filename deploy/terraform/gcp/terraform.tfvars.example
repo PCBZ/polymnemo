@@ -9,3 +9,8 @@ api_keys   = "sk-alice-secret:alice,sk-bob-secret:bob"
 # image = "us-west1-docker.pkg.dev/your-gcp-project-id/polymnemo/polymnemo:v1"
 
 # Instance sizing lives in modules/cloud-run/variables.tf.
+
+# To auto-fill the deployed URL into the repo's MCP_ENDPOINT Actions variable
+# (for the registry-publish workflow), export a GitHub token before `apply`:
+#   export GITHUB_TOKEN=<token with repo + actions:write on PCBZ/polymnemo>
+# github_owner / github_repository default to PCBZ / polymnemo.

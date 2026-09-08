@@ -26,3 +26,15 @@ variable "api_keys" {
   sensitive   = true
   description = "Per-user keys \"key1:alice,key2:bob\", injected as POLYMNEMO_API_KEYS."
 }
+
+variable "github_owner" {
+  type        = string
+  default     = "PCBZ"
+  description = "GitHub owner of the repo whose Actions variable MCP_ENDPOINT gets the deployed /mcp URL (for the registry-publish workflow)."
+}
+
+variable "github_repository" {
+  type        = string
+  default     = "polymnemo"
+  description = "GitHub repository name under github_owner."
+}
