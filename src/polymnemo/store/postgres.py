@@ -41,6 +41,11 @@ class MemoryRow(Base):
     source: Mapped[str | None] = mapped_column(default=None)
     session_id: Mapped[str | None] = mapped_column(default=None, index=True)
     seq: Mapped[int | None] = mapped_column(default=None)
+    kind: Mapped[str] = mapped_column(default="text")
+    object_key: Mapped[str | None] = mapped_column(default=None)
+    content_type: Mapped[str | None] = mapped_column(default=None)
+    size_bytes: Mapped[int | None] = mapped_column(default=None)
+    checksum: Mapped[str | None] = mapped_column(default=None)
     created_at: Mapped[datetime] = mapped_column(server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(server_default=func.now())
 
@@ -54,6 +59,11 @@ class MemoryRow(Base):
             source=self.source,
             session_id=self.session_id,
             seq=self.seq,
+            kind=self.kind,
+            object_key=self.object_key,
+            content_type=self.content_type,
+            size_bytes=self.size_bytes,
+            checksum=self.checksum,
             created_at=self.created_at,
             updated_at=self.updated_at,
             score=score,
@@ -106,6 +116,11 @@ class PostgresStore:
                     source=memory.source,
                     session_id=memory.session_id,
                     seq=memory.seq,
+                    kind=memory.kind,
+                    object_key=memory.object_key,
+                    content_type=memory.content_type,
+                    size_bytes=memory.size_bytes,
+                    checksum=memory.checksum,
                 )
             )
         return memory.id

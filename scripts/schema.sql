@@ -18,6 +18,11 @@ CREATE TABLE IF NOT EXISTS memories (
     source      TEXT,
     session_id  TEXT,        -- set for chunks of a saved session (#15)
     seq         INTEGER,     -- 0-based order within a session
+    kind         TEXT NOT NULL DEFAULT 'text',  -- text | file | image | video (#44)
+    object_key   TEXT,        -- pointer into object storage (media memories)
+    content_type TEXT,
+    size_bytes   BIGINT,
+    checksum     TEXT,
     created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at  TIMESTAMPTZ NOT NULL DEFAULT now()
 );

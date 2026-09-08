@@ -16,6 +16,7 @@ import logging
 from dataclasses import dataclass
 
 from .auth import Auth, BearerKeyAuth, StaticAuth
+from .blobstore import BlobStore
 from .config import settings
 from .embedding import Embedder, FastEmbedEmbedder, StubEmbedder
 from .ratelimit import GlobalRateLimiter
@@ -32,6 +33,7 @@ class AppContext:
     embedder: Embedder
     retriever: Retriever
     rate_limiter: GlobalRateLimiter | None
+    blob_store: BlobStore | None
 
     def describe(self) -> dict[str, str]:
         """Names of the active implementations (for diagnostics / ``ping``)."""
@@ -41,6 +43,7 @@ class AppContext:
             "embedder": type(self.embedder).__name__,
             "retriever": type(self.retriever).__name__,
             "rate_limiter": type(self.rate_limiter).__name__ if self.rate_limiter else "disabled",
+            "blob_store": type(self.blob_store).__name__ if self.blob_store else "disabled",
         }
 
 
@@ -87,16 +90,36 @@ def _build_rate_limiter() -> GlobalRateLimiter | None:
     return GlobalRateLimiter(settings.ratelimit_per_min)
 
 
+def _build_blob_store() -> BlobStore | None:
+    backend = settings.blob_backend
+    if backend == "none":
+        return None
+    if backend == "s3":
+        from .blobstore.s3 import S3BlobStore
+
+        logger.info("Using S3BlobStore (R2)")
+        return S3BlobStore(
+            bucket=settings.blob_bucket,
+            endpoint_url=settings.blob_endpoint_url,
+            access_key_id=settings.blob_access_key_id,
+            secret_access_key=settings.blob_secret_access_key,
+            url_ttl=settings.blob_url_ttl,
+        )
+    raise RuntimeError(f"unknown POLYMNEMO_BLOB_BACKEND: {backend!r}")
+
+
 def build_context() -> AppContext:
     store: Store = _build_store()
     embedder: Embedder = _build_embedder()
     retriever: Retriever = VectorRetriever(store=store, embedder=embedder)
     auth: Auth = _build_auth()
     rate_limiter: GlobalRateLimiter | None = _build_rate_limiter()
+    blob_store: BlobStore | None = _build_blob_store()
     return AppContext(
         auth=auth,
         store=store,
         embedder=embedder,
         retriever=retriever,
         rate_limiter=rate_limiter,
+        blob_store=blob_store,
     )

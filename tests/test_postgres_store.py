@@ -124,6 +124,26 @@ def test_replace_session_swaps_whole_session(store):
     assert [r.content for r in rows] == ["new-0 ", "new-1 ", "new-2"]
 
 
+def test_media_memory_round_trips(store):
+    m = Memory(
+        id=new_id(),
+        user_id="alice",
+        namespace="shared",
+        content="a photo of my cat",
+        kind="image",
+        object_key="alice/xyz/cat.png",
+        content_type="image/png",
+        size_bytes=1234,
+    )
+    store.add(m, _vec((0, 1.0)))
+    got = store.get("alice", m.id)
+    assert got.kind == "image"
+    assert got.object_key == "alice/xyz/cat.png"
+    assert got.content_type == "image/png"
+    assert got.size_bytes == 1234
+    assert got.to_public()["kind"] == "image"
+
+
 def test_shared_vs_private(store):
     shared = _mem(user_id="alice", namespace="shared", content="team fact")
     private = _mem(user_id="alice", namespace="diary", content="secret")

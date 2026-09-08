@@ -174,6 +174,38 @@ def load_session(session_id: str, page: int = 0, page_size: int = 8000) -> dict:
     )
 
 
+@mcp.tool(annotations={"readOnlyHint": False, "destructiveHint": False})
+@tool_errors
+@rate_limited(cost=2)
+def create_upload(
+    filename: str, content_type: str, description: str, namespace: str | None = None
+) -> dict:
+    """Register a file / image / video memory and get a URL to upload its bytes.
+
+    The bytes never go through this channel: `description` is embedded so the file
+    is findable via `recall`, and you PUT the raw bytes to the returned
+    `upload_url` **sending the returned `upload_headers`** (the Content-Type is
+    signed into the URL, so the PUT must send it or storage rejects it). Fetch
+    them later with `get_download_url`. Media defaults to a private namespace.
+    Returns `{memory_id, object_key, upload_url, upload_headers, content_type, namespace}`.
+    """
+    return app.service.create_upload(
+        current_user(), filename, content_type, description, namespace=namespace
+    )
+
+
+@mcp.tool(annotations={"readOnlyHint": True})
+@tool_errors
+@rate_limited(cost=1)
+def get_download_url(id: str) -> dict:
+    """Get a short-lived URL to download a media memory's bytes.
+
+    `id` is the media memory's id (from `create_upload` / `recall`). Returns
+    `{memory_id, url, content_type}`.
+    """
+    return app.service.get_download_url(current_user(), id)
+
+
 @mcp.resource("memory://{namespace}")
 def namespace_collection(namespace: str) -> dict:
     """A namespace's memories, for the authenticated user, so a client can

@@ -10,13 +10,42 @@ os.environ.setdefault("POLYMNEMO_AUTH_BACKEND", "static")
 os.environ.setdefault("POLYMNEMO_CHUNK_TOKENS", "40")
 os.environ.setdefault("POLYMNEMO_CHUNK_OVERLAP_TOKENS", "8")
 
+from dataclasses import replace
+
 import pytest
 
 from polymnemo.context import build_context
 from polymnemo.service import MemoryService
 
 
+class FakeBlobStore:
+    """Test double for BlobStore — deterministic, network-free URLs. Lives in the
+    tests (not src): it's only for exercising the media path offline, never a real
+    runtime backend."""
+
+    _BASE = "https://blob.local"
+
+    def __init__(self) -> None:
+        self.deleted: list[str] = []
+
+    def presign_put(self, object_key: str, content_type: str) -> str:
+        return f"{self._BASE}/{object_key}?method=PUT&content_type={content_type}"
+
+    def presign_get(self, object_key: str) -> str:
+        return f"{self._BASE}/{object_key}?method=GET"
+
+    def delete(self, object_key: str) -> None:
+        self.deleted.append(object_key)
+
+
+@pytest.fixture
+def fake_blob_store() -> FakeBlobStore:
+    return FakeBlobStore()
+
+
 @pytest.fixture
 def service() -> MemoryService:
-    """A service backed by a fresh in-memory store + stub embedder per test."""
-    return MemoryService(build_context())
+    """A service backed by a fresh in-memory store + stub embedder, with a fake
+    blob store injected so the media tools are exercisable."""
+    ctx = replace(build_context(), blob_store=FakeBlobStore())
+    return MemoryService(ctx)
