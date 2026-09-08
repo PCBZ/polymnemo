@@ -21,7 +21,13 @@ dependencies = [
     # depended on directly since config.py imports it).
     "pydantic-settings>=2.0",
     # Local, deterministic embeddings (ONNX, no API key). Brings numpy.
-    "fastembed>=0.4",
+    # Pinned to the 0.8.x line: fastembed 0.8.0 switched this model's pooling
+    # from CLS to mean, which changes the vectors. Stored embeddings and query
+    # embeddings must come from the SAME pooling, so crossing that boundary
+    # (e.g. an old <0.8 install, or a future 0.9 that changes it again) would
+    # silently degrade recall. Bumping past <0.9 is a deliberate, reviewed step
+    # that may require re-embedding everything. See issue #38.
+    "fastembed>=0.8,<0.9",
     # Token-aware chunking (Rust; respects the model's context window).
     "semantic-text-splitter>=0.13",
     # HF tokenizer used to size chunks in tokens (also a fastembed dep).
