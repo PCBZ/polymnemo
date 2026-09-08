@@ -32,6 +32,8 @@ dependencies = [
     "semantic-text-splitter>=0.13",
     # HF tokenizer used to size chunks in tokens (also a fastembed dep).
     "tokenizers>=0.15",
+    # Global token-bucket rate limiter (opt-in via POLYMNEMO_RATELIMIT_ENABLED).
+    "pyrate-limiter>=3,<4",
 ]
 
 [project.optional-dependencies]

@@ -80,6 +80,12 @@ class Settings(BaseSettings):
     recall_limit: int = 8
     list_limit: int = 20
 
+    # --- Rate limiting -------------------------------------------------------
+    # One global (per-process) token bucket via pyrate-limiter, off by default.
+    # Not per-user — just caps this instance's overall intake, in ops per minute.
+    ratelimit_enabled: bool = False
+    ratelimit_per_min: int = 600
+
     # --- Auth ----------------------------------------------------------------
     # "bearer" (per-user keys, the real scheme) or "static" (dev, single user).
     auth_backend: str = "bearer"
