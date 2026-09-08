@@ -101,6 +101,17 @@ class Settings(BaseSettings):
             )
         return self
 
+    # --- Blob storage (large / multimedia memories, #44) ---------------------
+    # "none" (default, off — media tools disabled) or "s3" (Cloudflare R2 / any
+    # S3-compatible store). Bytes go to object storage via presigned URLs;
+    # Postgres keeps only a pointer + searchable description.
+    blob_backend: str = "none"
+    blob_bucket: str = ""
+    blob_endpoint_url: str = ""  # e.g. https://<account>.r2.cloudflarestorage.com
+    blob_access_key_id: str = ""
+    blob_secret_access_key: str = ""
+    blob_url_ttl: int = 900  # presigned-URL lifetime, seconds
+
     # --- Auth ----------------------------------------------------------------
     # "bearer" (per-user keys, the real scheme) or "static" (dev, single user).
     auth_backend: str = "bearer"

@@ -34,6 +34,17 @@ def _page(rows: list[Memory], total: int, offset: int) -> dict:
     }
 
 
+def _kind_from_content_type(content_type: str) -> str:
+    """Coarse memory kind from a MIME type (image/* -> image, etc.)."""
+    top = content_type.split("/", 1)[0].strip().lower()
+    return top if top in ("image", "video", "audio") else "file"
+
+
+def _safe_filename(filename: str) -> str:
+    """Strip any path so the object key stays under the user's prefix."""
+    return (filename or "").replace("\\", "/").split("/")[-1].strip()
+
+
 class MemoryService:
     def __init__(self, ctx: AppContext) -> None:
         self.ctx = ctx
@@ -219,3 +230,76 @@ class MemoryService:
             "total_chars": pos,
             "has_more": start + len(content) < pos,
         }
+
+    # -- media memories (#44) -------------------------------------------------
+    def create_upload(
+        self,
+        user_id: str,
+        filename: str,
+        content_type: str,
+        description: str,
+        namespace: str | None = None,
+    ) -> dict:
+        """Register a media memory and return a presigned URL to PUT the bytes to.
+
+        The bytes never pass through MCP: we embed the text ``description`` (so the
+        file is findable via ``recall``), store a pointer (``object_key``) in
+        Postgres, and hand back a short-lived upload URL. The client uploads
+        straight to object storage.
+        """
+        if self.ctx.blob_store is None:
+            raise ValueError(
+                "blob storage is not configured — set POLYMNEMO_BLOB_BACKEND."
+            )
+        filename = _safe_filename(filename)
+        content_type = (content_type or "").strip()
+        description = (description or "").strip()
+        if not filename:
+            raise ValueError("filename is empty.")
+        if not content_type:
+            raise ValueError("content_type is empty (e.g. image/png).")
+        if not description:
+            raise ValueError(
+                "description is empty — it's what makes the file findable via recall."
+            )
+
+        ns = namespace or settings.default_namespace
+        memory_id = new_id()
+        object_key = f"{user_id}/{memory_id}/{filename}"
+        embedding = self.ctx.embedder.embed_documents([description])[0]
+        memory = Memory(
+            id=memory_id,
+            user_id=user_id,
+            namespace=ns,
+            content=description,
+            kind=_kind_from_content_type(content_type),
+            object_key=object_key,
+            content_type=content_type,
+        )
+        self.ctx.store.add(memory, embedding)
+        upload_url = self.ctx.blob_store.presign_put(object_key, content_type)
+        return {
+            "memory_id": memory_id,
+            "object_key": object_key,
+            "upload_url": upload_url,
+            "namespace": ns,
+        }
+
+    def get_download_url(self, user_id: str, memory_id: str) -> dict:
+        """Return a short-lived presigned URL to GET a media memory's bytes."""
+        if self.ctx.blob_store is None:
+            raise ValueError(
+                "blob storage is not configured — set POLYMNEMO_BLOB_BACKEND."
+            )
+        memory = self.ctx.store.get(user_id, memory_id)
+        if memory is None:
+            raise ValueError(
+                f"no memory with id '{memory_id}' for this user — "
+                "call list_memories to see valid ids."
+            )
+        if not memory.object_key:
+            raise ValueError(
+                f"memory '{memory_id}' is not a media memory (it has no stored file)."
+            )
+        url = self.ctx.blob_store.presign_get(memory.object_key)
+        return {"memory_id": memory_id, "url": url, "content_type": memory.content_type}
