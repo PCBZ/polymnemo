@@ -29,3 +29,13 @@ module "cloud_run" {
   database_url = data.terraform_remote_state.neon.outputs.connection_uri_pooler
   api_keys     = var.api_keys
 }
+
+# Auto-fill the deployed /mcp endpoint into a GitHub Actions variable, so the
+# registry-publish workflow can put it into server.json on release — no manual
+# copy of the URL. Only once the service exists (image set).
+resource "github_actions_variable" "mcp_endpoint" {
+  count         = var.image == "" ? 0 : 1
+  repository    = var.github_repository
+  variable_name = "MCP_ENDPOINT"
+  value         = module.cloud_run.mcp_endpoint
+}

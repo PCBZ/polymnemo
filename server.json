@@ -1,0 +1,25 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.PCBZ/polymnemo",
+  "title": "polymnemo",
+  "description": "A shared long-term memory across any LLM, over MCP — semantic recall, sessions, and multimedia, backed by Postgres + pgvector with local embeddings (no generative-LLM calls).",
+  "repository": {
+    "url": "https://github.com/PCBZ/polymnemo",
+    "source": "github"
+  },
+  "version": "0.0.1",
+  "remotes": [
+    {
+      "type": "streamable-http",
+      "url": "https://REPLACE_WITH_YOUR_DEPLOYED_URL/mcp",
+      "headers": [
+        {
+          "name": "Authorization",
+          "description": "Bearer <your polymnemo API key>. Keys are per-user; request one from the maintainer.",
+          "isRequired": true,
+          "isSecret": true
+        }
+      ]
+    }
+  ]
+}
