@@ -14,8 +14,7 @@ import logging
 
 from fastmcp import FastMCP
 
-from . import __version__
-from .app import ctx, service
+from . import __version__, app
 from .config import settings
 from .tooling import current_user, rate_limited, tool_errors
 
@@ -41,7 +40,7 @@ def ping() -> dict:
         "ok": True,
         "server": "polymnemo",
         "version": __version__,
-        "layers": ctx.describe(),
+        "layers": app.ctx.describe(),
     }
 
 
@@ -62,7 +61,7 @@ def remember(
 
     Returns `{ids, chunks, namespace}`.
     """
-    return service.remember(
+    return app.service.remember(
         current_user(), content, namespace=namespace, tags=tags, source=source
     )
 
@@ -85,7 +84,7 @@ def recall(
 
     Returns `{items, total, has_more, next_cursor}`.
     """
-    return service.recall(
+    return app.service.recall(
         current_user(), query, namespace=namespace, limit=limit, cursor=cursor
     )
 
@@ -103,7 +102,7 @@ def list_memories(
     `namespace` selects the collection (defaults to the shared namespace). Page
     with `next_cursor` / `has_more`. Returns `{items, total, has_more, next_cursor}`.
     """
-    return service.list_memories(
+    return app.service.list_memories(
         current_user(), namespace=namespace, limit=limit, cursor=cursor
     )
 
@@ -113,7 +112,7 @@ def list_memories(
 @rate_limited(cost=1)
 def get_memory(id: str) -> dict:
     """Fetch a single memory by its id (from `remember`/`recall`/`list_memories`)."""
-    return service.get_memory(current_user(), id)
+    return app.service.get_memory(current_user(), id)
 
 
 @mcp.tool(
@@ -127,7 +126,7 @@ def get_memory(id: str) -> dict:
 @rate_limited(cost=2)
 def update(id: str, content: str) -> dict:
     """Replace a memory's content (re-embeds it). Returns the updated memory."""
-    return service.update(current_user(), id, content)
+    return app.service.update(current_user(), id, content)
 
 
 @mcp.tool(
@@ -141,7 +140,7 @@ def update(id: str, content: str) -> dict:
 @rate_limited(cost=1)
 def forget(id: str) -> dict:
     """Delete a memory by id. Returns `{id, deleted}` (deleted=false if absent)."""
-    return service.forget(current_user(), id)
+    return app.service.forget(current_user(), id)
 
 
 @mcp.tool(annotations={"readOnlyHint": False, "destructiveHint": False})
@@ -156,7 +155,7 @@ def save_session(
     so it's searchable via `recall`). Re-saving the same `session_id` replaces it.
     Returns `{session_id, chunks, chars, namespace}`.
     """
-    return service.save_session(
+    return app.service.save_session(
         current_user(), session_id, content, namespace=namespace
     )
 
@@ -170,19 +169,18 @@ def load_session(session_id: str, page: int = 0, page_size: int = 8000) -> dict:
     Page with `page` (0-based) while `has_more` is true. Returns
     `{session_id, content, page, page_size, total_chars, has_more}`.
     """
-    return service.load_session(
+    return app.service.load_session(
         current_user(), session_id, page=page, page_size=page_size
     )
 
 
 @mcp.resource("memory://{namespace}")
-@rate_limited(cost=1)
 def namespace_collection(namespace: str) -> dict:
     """A namespace's memories, for the authenticated user, so a client can
     auto-inject the collection. Bounded like `list_memories`; page further with
     that tool. Returns `{items, total, has_more, next_cursor}`.
     """
-    return service.list_memories(current_user(), namespace=namespace)
+    return app.service.list_memories(current_user(), namespace=namespace)
 
 
 def main() -> None:

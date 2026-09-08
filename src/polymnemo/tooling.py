@@ -35,17 +35,22 @@ def current_user() -> str:
         raise ToolError(f"Authentication failed: {exc}") from exc
 
 
-def rate_limited(cost: float = 1.0):
-    """Charge the GLOBAL rate-limit bucket ``cost`` tokens before the tool runs.
+def rate_limited(cost: int = 1):
+    """Authenticate the caller, then charge the GLOBAL rate-limit bucket ``cost``
+    tokens before the tool runs.
 
-    A server-wide gate, **not** per-user (auth is separate — see
-    ``current_user``). Embed-heavy tools pass a higher ``cost``; over the limit
-    surfaces as a ``ToolError``. No-op unless rate limiting is enabled.
+    Auth runs **first**, by design: the bucket is server-wide, so charging it
+    before rejecting anonymous callers would let junk traffic drain the shared
+    budget and lock out real users — and requests rejected at auth do no
+    embedding, so they shouldn't spend the budget either. The limit itself is
+    global, **not** per-user. Embed-heavy tools pass a higher ``cost``; over the
+    limit surfaces as a ``ToolError``.
     """
 
     def decorate(fn):
         @functools.wraps(fn)
         def wrapper(*args, **kwargs):
+            current_user()  # authenticate first: reject anon before charging
             if app.ctx.rate_limiter is not None:
                 try:
                     app.ctx.rate_limiter.check(cost)

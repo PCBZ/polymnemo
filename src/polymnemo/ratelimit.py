@@ -26,10 +26,10 @@ class GlobalRateLimiter:
     def __init__(self, per_min: int) -> None:
         self._limiter = Limiter(Rate(per_min, Duration.MINUTE))
 
-    def check(self, cost: float = 1.0) -> None:
+    def check(self, cost: int = 1) -> None:
         """Consume ``cost`` tokens; raise :class:`RateLimitError` if over the
-        limit. ``cost`` lets embed-heavy tools count for more."""
+        limit. ``cost`` (an int weight) lets embed-heavy tools count for more."""
         try:
-            self._limiter.try_acquire(self._KEY, weight=int(cost))
+            self._limiter.try_acquire(self._KEY, weight=cost)
         except BucketFullException as exc:
             raise RateLimitError("rate limit exceeded — please slow down.") from exc

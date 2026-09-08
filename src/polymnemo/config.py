@@ -11,8 +11,13 @@ skeleton carries. Later issues extend this (database URL in #2/#6, API keys in
 
 from __future__ import annotations
 
-from pydantic import AliasChoices, Field
+from pydantic import AliasChoices, Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+# The most expensive tool costs this many tokens (remember / recall / update /
+# save_session). The rate-limit bucket must be at least this large, or those
+# tools could never acquire and would fail on every call.
+MAX_TOOL_COST = 2
 
 
 class Settings(BaseSettings):
@@ -85,6 +90,16 @@ class Settings(BaseSettings):
     # Not per-user — just caps this instance's overall intake, in ops per minute.
     ratelimit_enabled: bool = False
     ratelimit_per_min: int = 600
+
+    @model_validator(mode="after")
+    def _check_ratelimit(self) -> "Settings":
+        if self.ratelimit_enabled and self.ratelimit_per_min < MAX_TOOL_COST:
+            raise ValueError(
+                f"POLYMNEMO_RATELIMIT_PER_MIN ({self.ratelimit_per_min}) must be "
+                f">= {MAX_TOOL_COST} (the most expensive tool's cost) when rate "
+                "limiting is enabled, or those tools would fail on every call."
+            )
+        return self
 
     # --- Auth ----------------------------------------------------------------
     # "bearer" (per-user keys, the real scheme) or "static" (dev, single user).

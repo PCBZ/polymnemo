@@ -23,6 +23,15 @@ def test_cost_weighting():
         rl.check(cost=2)  # 2 + 2 > 3
 
 
+def test_per_min_below_max_cost_is_rejected():
+    from polymnemo.config import Settings
+
+    with pytest.raises(Exception):  # pydantic ValidationError
+        Settings(ratelimit_enabled=True, ratelimit_per_min=1)
+    # a value that covers the max tool cost is fine
+    assert Settings(ratelimit_enabled=True, ratelimit_per_min=2).ratelimit_per_min == 2
+
+
 def test_context_enabled_flag(monkeypatch):
     from polymnemo import context
     from polymnemo.config import settings

@@ -6,7 +6,7 @@ import pytest
 from fastmcp import Client
 from fastmcp.exceptions import ToolError
 
-from polymnemo import server
+from polymnemo import app, server
 
 EXPECTED_TOOLS = {
     "ping",
@@ -24,9 +24,9 @@ EXPECTED_TOOLS = {
 @pytest.fixture(autouse=True)
 def _isolate_store():
     """Each test starts from an empty in-memory store."""
-    server.ctx.store._rows.clear()
+    app.ctx.store._rows.clear()
     yield
-    server.ctx.store._rows.clear()
+    app.ctx.store._rows.clear()
 
 
 async def test_tool_surface_and_annotations():
