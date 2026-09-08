@@ -1,0 +1,5 @@
+# Copy to terraform.tfvars and fill in. terraform.tfvars and the state file hold
+# secrets — both are gitignored.
+
+neon_api_key   = "neon_api_key_xxx"
+neon_region_id = "aws-us-west-2"
