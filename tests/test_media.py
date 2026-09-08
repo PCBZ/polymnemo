@@ -16,9 +16,12 @@ def test_create_upload_registers_and_is_recallable(service):
     assert r["upload_url"].startswith("https://blob.local/")
     assert r["object_key"].endswith("/cat.png")
     assert r["memory_id"]
+    # media defaults to a PRIVATE namespace, and the required PUT header is surfaced
+    assert r["namespace"] == "media"
+    assert r["upload_headers"] == {"Content-Type": "image/png"}
 
-    # findable by its description via vector recall
-    found = service.recall("alice", "cat photo")
+    # findable by its description via vector recall (in the media namespace)
+    found = service.recall("alice", "cat photo", namespace="media")
     assert found["total"] == 1
     item = found["items"][0]
     assert item["kind"] == "image"
@@ -29,6 +32,23 @@ def test_create_upload_registers_and_is_recallable(service):
     d = service.get_download_url("alice", r["memory_id"])
     assert d["url"].startswith("https://blob.local/")
     assert d["content_type"] == "image/png"
+
+
+def test_media_is_private_to_owner(service):
+    r = service.create_upload("alice", "secret.png", "image/png", "private diagram")
+    # another user can't see it or mint a download URL for alice's bytes
+    with pytest.raises(ValueError):
+        service.get_download_url("bob", r["memory_id"])
+    assert service.recall("bob", "diagram", namespace="media")["total"] == 0
+
+
+def test_forget_deletes_the_object(service):
+    r = service.create_upload("alice", "cat.png", "image/png", "a cat")
+    service.forget("alice", r["memory_id"])
+    # the pointer is gone AND the object was deleted (not just orphaned)
+    assert r["object_key"] in service.ctx.blob_store.deleted
+    with pytest.raises(ValueError):
+        service.get_download_url("alice", r["memory_id"])
 
 
 def test_get_download_url_rejects_text_memory(service):
@@ -88,7 +108,11 @@ async def test_media_tools_over_client(monkeypatch, fake_blob_store):
             ).data
             assert r["upload_url"].startswith("https://blob.local/")
 
-            recalled = (await client.call_tool("recall", {"query": "demo video"})).data
+            recalled = (
+                await client.call_tool(
+                    "recall", {"query": "demo video", "namespace": "media"}
+                )
+            ).data
             assert recalled["total"] == 1
             assert recalled["items"][0]["kind"] == "video"
 

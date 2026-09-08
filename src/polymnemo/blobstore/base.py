@@ -28,3 +28,7 @@ class BlobStore(Protocol):
     def presign_get(self, object_key: str) -> str:
         """A short-lived URL the client GETs bytes from (direct download)."""
         ...
+
+    def delete(self, object_key: str) -> None:
+        """Delete the object, so ``forget`` removes the bytes, not just the pointer."""
+        ...

@@ -184,8 +184,10 @@ def create_upload(
 
     The bytes never go through this channel: `description` is embedded so the file
     is findable via `recall`, and you PUT the raw bytes to the returned
-    `upload_url` (directly to object storage). Fetch them later with
-    `get_download_url`. Returns `{memory_id, object_key, upload_url, namespace}`.
+    `upload_url` **sending the returned `upload_headers`** (the Content-Type is
+    signed into the URL, so the PUT must send it or storage rejects it). Fetch
+    them later with `get_download_url`. Media defaults to a private namespace.
+    Returns `{memory_id, object_key, upload_url, upload_headers, content_type, namespace}`.
     """
     return app.service.create_upload(
         current_user(), filename, content_type, description, namespace=namespace

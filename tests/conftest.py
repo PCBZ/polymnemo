@@ -25,11 +25,17 @@ class FakeBlobStore:
 
     _BASE = "https://blob.local"
 
+    def __init__(self) -> None:
+        self.deleted: list[str] = []
+
     def presign_put(self, object_key: str, content_type: str) -> str:
         return f"{self._BASE}/{object_key}?method=PUT&content_type={content_type}"
 
     def presign_get(self, object_key: str) -> str:
         return f"{self._BASE}/{object_key}?method=GET"
+
+    def delete(self, object_key: str) -> None:
+        self.deleted.append(object_key)
 
 
 @pytest.fixture

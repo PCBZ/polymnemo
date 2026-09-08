@@ -56,3 +56,6 @@ class S3BlobStore:
             Params={"Bucket": self._bucket, "Key": object_key},
             ExpiresIn=self._ttl,
         )
+
+    def delete(self, object_key: str) -> None:
+        self._client.delete_object(Bucket=self._bucket, Key=object_key)

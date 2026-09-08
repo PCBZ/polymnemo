@@ -76,6 +76,10 @@ class Settings(BaseSettings):
     # shared_namespaces so a session (a full transcript) stays private to its
     # owner — otherwise its verbatim chunks would be world-readable via recall.
     session_namespace: str = "sessions"
+    # Where create_upload puts media by default. Kept OUT of shared_namespaces:
+    # binary/media (photos, docs, video) is far more likely personal than a
+    # "born-shared" text fact, and a download URL hands over the actual bytes.
+    media_namespace: str = "media"
 
     def parse_shared_namespaces(self) -> frozenset[str]:
         return frozenset(n.strip() for n in self.shared_namespaces.split(",") if n.strip())

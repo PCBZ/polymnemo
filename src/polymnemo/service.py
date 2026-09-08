@@ -8,10 +8,15 @@ transport concerns and is easy to test.
 
 from __future__ import annotations
 
+import logging
+
+from .blobstore import BlobError
 from .chunking import chunk_text, chunk_verbatim
 from .config import settings
 from .context import AppContext
 from .models import Memory, new_id
+
+logger = logging.getLogger("polymnemo")
 
 
 def _parse_offset(cursor: str | None) -> int:
@@ -148,8 +153,21 @@ class MemoryService:
         return memory.to_public()
 
     def forget(self, user_id: str, memory_id: str) -> dict:
-        """Delete a memory; report whether a row was removed."""
+        """Delete a memory; report whether a row was removed.
+
+        For a media memory, best-effort delete its stored object too, so "forget"
+        removes the bytes — not just the pointer (a blob-delete failure only leaks
+        the object; the memory is still gone).
+        """
+        memory = self.ctx.store.get(user_id, memory_id)
         deleted = self.ctx.store.delete(user_id, memory_id)
+        if deleted and memory and memory.object_key and self.ctx.blob_store is not None:
+            try:
+                self.ctx.blob_store.delete(memory.object_key)
+            except BlobError:
+                logger.warning(
+                    "blob delete failed for %s; object leaked", memory.object_key
+                )
         return {"id": memory_id, "deleted": deleted}
 
     def save_session(
@@ -263,9 +281,12 @@ class MemoryService:
                 "description is empty — it's what makes the file findable via recall."
             )
 
-        ns = namespace or settings.default_namespace
+        # Private by default: media is more likely personal than a shared text fact.
+        ns = namespace or settings.media_namespace
         memory_id = new_id()
         object_key = f"{user_id}/{memory_id}/{filename}"
+        # Presign first, so a presign failure can't leave an orphan DB row.
+        upload_url = self.ctx.blob_store.presign_put(object_key, content_type)
         embedding = self.ctx.embedder.embed_documents([description])[0]
         memory = Memory(
             id=memory_id,
@@ -277,11 +298,14 @@ class MemoryService:
             content_type=content_type,
         )
         self.ctx.store.add(memory, embedding)
-        upload_url = self.ctx.blob_store.presign_put(object_key, content_type)
         return {
             "memory_id": memory_id,
             "object_key": object_key,
             "upload_url": upload_url,
+            # The URL signs Content-Type, so the client MUST send this header on
+            # the PUT or object storage rejects it (403 SignatureDoesNotMatch).
+            "upload_headers": {"Content-Type": content_type},
+            "content_type": content_type,
             "namespace": ns,
         }
 
