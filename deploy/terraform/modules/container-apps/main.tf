@@ -29,11 +29,29 @@ resource "azurerm_role_assignment" "acr_pull" {
   principal_id         = azurerm_user_assigned_identity.pull.principal_id
 }
 
-# --- Managed environment (Consumption plan; scale-to-zero capable) -----------
-resource "azurerm_container_app_environment" "this" {
-  name                = "${var.service_name}-env"
+# Azure RBAC is eventually consistent (assignment takes tens of seconds to
+# propagate). Without this wait, a one-shot apply can hit "UNAUTHORIZED" on the
+# first image pull. time_sleep delays the app until the grant is effective.
+resource "time_sleep" "acr_rbac_propagation" {
+  depends_on      = [azurerm_role_assignment.acr_pull]
+  create_duration = "60s"
+}
+
+# --- Log Analytics: persistent destination for container logs ---------------
+resource "azurerm_log_analytics_workspace" "this" {
+  name                = "${var.service_name}-logs"
   resource_group_name = azurerm_resource_group.this.name
   location            = azurerm_resource_group.this.location
+  sku                 = "PerGB2018"
+  retention_in_days   = 30
+}
+
+# --- Managed environment (Consumption plan; scale-to-zero capable) -----------
+resource "azurerm_container_app_environment" "this" {
+  name                       = "${var.service_name}-env"
+  resource_group_name        = azurerm_resource_group.this.name
+  location                   = azurerm_resource_group.this.location
+  log_analytics_workspace_id = azurerm_log_analytics_workspace.this.id
 }
 
 # --- The app (skipped on the bootstrap apply, when image == "") --------------
@@ -101,5 +119,5 @@ resource "azurerm_container_app" "this" {
     }
   }
 
-  depends_on = [azurerm_role_assignment.acr_pull]
+  depends_on = [time_sleep.acr_rbac_propagation]
 }

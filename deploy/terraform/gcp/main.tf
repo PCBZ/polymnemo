@@ -10,6 +10,9 @@
 #   5. terraform apply -var "image=$REPO/polymnemo:v1"
 #   6. terraform output -raw mcp_endpoint
 
+# Reads the shared Neon root's state over a LOCAL relative path — this requires
+# all three roots in one checkout, applied on one machine, neon applied first.
+# For CI or a second operator, a shared remote backend is REQUIRED (see neon/versions.tf).
 data "terraform_remote_state" "neon" {
   backend = "local"
   config = {
