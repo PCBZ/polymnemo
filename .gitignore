@@ -223,11 +223,11 @@ __marimo__/
 # GitHub App credentials (run-gemini-cli)
 gha-creds-*.json
 
-# Terraform
-deploy/terraform/.terraform/
-deploy/terraform/*.tfstate
-deploy/terraform/*.tfstate.*
-deploy/terraform/terraform.tfvars
-deploy/terraform/*.tfplan
-deploy/terraform/crash.log
-deploy/terraform/crash.*.log
+# Terraform (per-root: neon/ gcp/ azure/). Lock files (.terraform.lock.hcl) stay tracked.
+deploy/terraform/**/.terraform/
+deploy/terraform/**/*.tfstate
+deploy/terraform/**/*.tfstate.*
+deploy/terraform/**/terraform.tfvars
+deploy/terraform/**/*.tfplan
+deploy/terraform/**/crash.log
+deploy/terraform/**/crash.*.log

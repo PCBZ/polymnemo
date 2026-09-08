@@ -140,9 +140,13 @@ Postgres tests run when `TEST_DATABASE_URL` points at a pgvector Postgres.
 
 ## Deploy
 
-polymnemo is stateless (all state in Neon) and deploys to Google Cloud Run with
-scale-to-zero. Infrastructure is defined as Terraform in
-[`deploy/terraform/`](deploy/terraform) (usage is in `main.tf`).
+polymnemo is stateless (all state in Neon), so it runs on **Google Cloud Run**
+and/or **Azure Container Apps** with scale-to-zero. Infrastructure is Terraform in
+[`deploy/terraform/`](deploy/terraform): a shared [`neon/`](deploy/terraform/neon)
+root owns the one database, and the [`gcp/`](deploy/terraform/gcp) and
+[`azure/`](deploy/terraform/azure) roots each deploy a service against it — so a
+memory written from one cloud is recallable from the other. Usage is in each
+root's `main.tf`.
 
 ## License
 

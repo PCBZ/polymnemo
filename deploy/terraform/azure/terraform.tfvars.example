@@ -1,0 +1,10 @@
+# Copy to terraform.tfvars and fill in. terraform.tfvars and state hold secrets —
+# both are gitignored. Apply the neon root first (this reads its state).
+
+azure_subscription_id = "00000000-0000-0000-0000-000000000000"
+location              = "westus2"
+acr_name              = "polymnemoacr123" # globally unique, alphanumeric
+api_keys              = "sk-alice-secret:alice,sk-bob-secret:bob"
+
+# Leave `image` unset for the first (bootstrap) apply; set it after build & push:
+# image = "polymnemoacr123.azurecr.io/polymnemo:v1"

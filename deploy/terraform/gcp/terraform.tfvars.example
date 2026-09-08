@@ -1,0 +1,11 @@
+# Copy to terraform.tfvars and fill in. terraform.tfvars and state hold secrets —
+# both are gitignored. Apply the neon root first (this reads its state).
+
+project_id = "your-gcp-project-id"
+region     = "us-west1"
+api_keys   = "sk-alice-secret:alice,sk-bob-secret:bob"
+
+# Leave `image` unset for the first (bootstrap) apply; set it after build & push:
+# image = "us-west1-docker.pkg.dev/your-gcp-project-id/polymnemo/polymnemo:v1"
+
+# Instance sizing lives in modules/cloud-run/variables.tf.
