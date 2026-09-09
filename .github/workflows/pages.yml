@@ -1,0 +1,60 @@
+name: MCP tools page (Pages)
+
+# Regenerates the MCP tools reference from the live server and publishes it to
+# GitHub Pages. The page is built by scripts/gen_tools_page.py from the tool
+# docstrings/signatures, so it can never drift from the code. Runs when the tools
+# (server.py) or the generator change. configure-pages enables Pages on the first
+# run if the token can; otherwise enable it once (Settings -> Pages -> Source:
+# GitHub Actions).
+on:
+  push:
+    branches: [main]
+    paths:
+      - src/polymnemo/server.py
+      - scripts/gen_tools_page.py
+      - .github/workflows/pages.yml
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# One Pages deploy at a time; don't cancel an in-flight publish.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    env:
+      # Offline layers so importing the server is fast + side-effect-free (we
+      # only need the tool schemas, not a working embedder/DB).
+      POLYMNEMO_EMBED_BACKEND: stub
+      POLYMNEMO_AUTH_BACKEND: static
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install
+        run: pip install -e .
+      - name: Generate tools page
+        run: python scripts/gen_tools_page.py
+      - uses: actions/configure-pages@v5
+        with:
+          enablement: true
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
