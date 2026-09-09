@@ -12,7 +12,10 @@
 
 # The shared neon/ and r2/ roots keep their state in the Azure Storage backend
 # (see neon/versions.tf), so this root reads them from there too — meaning a GCP
-# deploy needs Azure credentials (ARM_* env) just to READ the shared state.
+# deploy needs Azure credentials (ARM_* env) just to READ the shared state. That
+# cross-cloud coupling is the deliberate cost of ONE shared Neon + R2 across both
+# clouds: the shared state has to live somewhere, and that's Azure Storage. (This
+# root keeps its OWN state local — it's a manual, secondary path with no CI.)
 # Apply neon/ and r2/ before this root.
 data "terraform_remote_state" "neon" {
   backend = "azurerm"

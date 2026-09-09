@@ -37,6 +37,8 @@ while IFS= read -r line || [[ -n "$line" ]]; do
   key="${line%%=*}"
   val="${line#*=}"
   key="${key// /}"                           # trim spaces around the key
+  val="${val#"${val%%[![:space:]]*}"}"       # trim leading whitespace
+  val="${val%"${val##*[![:space:]]}"}"       # trim trailing whitespace
   if [[ -z "$val" ]]; then
     echo "  skip   $key (blank)"
     skip_n=$((skip_n + 1))

@@ -16,9 +16,9 @@ on:
   workflow_dispatch:
     inputs:
       image_tag:
-        description: "Image tag to build and deploy"
+        description: "Image tag (optional; defaults to the commit SHA so each new commit rolls out)"
         required: false
-        default: v1
+        default: ""
 
 # Never let two deploys race the shared Terraform state.
 concurrency: deploy-azure
@@ -53,6 +53,7 @@ jobs:
   neon:
     name: neon (shared Postgres)
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
       - uses: hashicorp/setup-terraform@v3
@@ -67,6 +68,7 @@ jobs:
   r2:
     name: r2 (shared media bucket)
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
       - uses: hashicorp/setup-terraform@v3
@@ -82,15 +84,16 @@ jobs:
     name: schema (apply schema.sql)
     needs: [neon]
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
       - uses: hashicorp/setup-terraform@v3
         with:
           terraform_version: "1.13.2"
+      # psql ships preinstalled on ubuntu-latest — no apt step needed.
       - name: Apply schema.sql to Neon
         working-directory: deploy/terraform/neon
         run: |
-          sudo apt-get update -qq && sudo apt-get install -y -qq postgresql-client
           terraform init $TF_BACKEND -backend-config=key=neon.tfstate
           conn="$(terraform output -raw connection_uri)"
           psql "$conn" -v ON_ERROR_STOP=1 -f ../../../scripts/schema.sql
@@ -99,8 +102,12 @@ jobs:
     name: azure (build image + deploy app)
     needs: [r2, schema]
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     env:
-      TF_VAR_image_tag: ${{ inputs.image_tag }}
+      # Default the tag to the commit SHA so each new commit changes the app's
+      # image ref and actually rolls out a new revision (a static tag would
+      # rebuild in ACR but leave the app template unchanged -> no redeploy).
+      TF_VAR_image_tag: ${{ inputs.image_tag != '' && inputs.image_tag || github.sha }}
       TF_VAR_context_access_token: ${{ secrets.GITHUB_TOKEN }}
     steps:
       - uses: actions/checkout@v4

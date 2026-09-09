@@ -13,20 +13,27 @@
 #   bash scripts/bootstrap-tfstate-azure.sh
 #
 # Override any name via env, e.g. LOCATION=eastus bash scripts/bootstrap-...sh
-# Re-running is safe: az creates are idempotent and gh variable set overwrites.
+# Re-running is safe: the storage account name is stable (reused / deterministic),
+# az creates are idempotent, and gh variable set overwrites.
 
 set -euo pipefail
 
 LOCATION="${LOCATION:-westus2}"
 RESOURCE_GROUP="${RESOURCE_GROUP:-polymnemo-tfstate-rg}"
 CONTAINER="${CONTAINER:-tfstate}"
-# Storage account names are global + 3-24 lowercase alphanumeric.
-STORAGE_ACCOUNT="${STORAGE_ACCOUNT:-polymnemotfstate$RANDOM}"
 
 command -v az >/dev/null || { echo "error: az CLI not installed." >&2; exit 1; }
 command -v gh >/dev/null || { echo "error: gh CLI not installed." >&2; exit 1; }
 az account show >/dev/null 2>&1 || { echo "error: run 'az login' first." >&2; exit 1; }
 gh auth status >/dev/null 2>&1 || { echo "error: run 'gh auth login' first." >&2; exit 1; }
+
+# Pick the storage-account name once and STABLY so re-running reuses the same
+# state store instead of orphaning it: an explicit override, else the name
+# already recorded in the repo variable, else a deterministic name derived from
+# the subscription id (globally unique; 3-24 lowercase alphanumeric).
+existing_sa="$(gh variable get TFSTATE_STORAGE_ACCOUNT 2>/dev/null || true)"
+det_sa="polymnemotf$(az account show --query id -o tsv | tr -d '-' | cut -c1-13)"
+STORAGE_ACCOUNT="${STORAGE_ACCOUNT:-${existing_sa:-$det_sa}}"
 
 echo "Resource group : $RESOURCE_GROUP ($LOCATION)"
 echo "Storage account: $STORAGE_ACCOUNT"
