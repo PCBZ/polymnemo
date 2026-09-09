@@ -23,6 +23,7 @@ CREATE TABLE IF NOT EXISTS memories (
     content_type TEXT,
     size_bytes   BIGINT,
     checksum     TEXT,
+    confirmed    BOOLEAN NOT NULL DEFAULT TRUE,  -- media hidden until upload confirmed (#50)
     created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at  TIMESTAMPTZ NOT NULL DEFAULT now()
 );

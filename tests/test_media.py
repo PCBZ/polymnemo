@@ -1,6 +1,6 @@
-"""Media memories (#44): register a file, find it by description, get a download
-URL — all without bytes ever crossing the MCP channel (conftest uses the fake
-blob store)."""
+"""Media memories (#44, #50): register a file (presigned POST), confirm the
+upload, then find it by description / download it — bytes never cross the MCP
+channel (conftest injects a fake blob store)."""
 
 from dataclasses import replace
 
@@ -11,32 +11,38 @@ from polymnemo import app, server
 from polymnemo.service import MemoryService
 
 
-def test_create_upload_registers_and_is_recallable(service):
+def test_upload_is_hidden_until_confirmed(service):
     r = service.create_upload("alice", "cat.png", "image/png", "a photo of my cat")
     assert r["upload_url"].startswith("https://blob.local/")
     assert r["object_key"].endswith("/cat.png")
-    assert r["memory_id"]
-    # media defaults to a PRIVATE namespace, and the required PUT header is surfaced
-    assert r["namespace"] == "media"
-    assert r["upload_headers"] == {"Content-Type": "image/png"}
+    assert r["namespace"] == "media"  # private by default
+    assert r["upload_fields"]["Content-Type"] == "image/png"  # presigned POST fields
 
-    # findable by its description via vector recall (in the media namespace)
+    # UNCONFIRMED: not recall-able, and no download URL yet (no ghost memory)
+    assert service.recall("alice", "cat photo", namespace="media")["total"] == 0
+    with pytest.raises(ValueError):
+        service.get_download_url("alice", r["memory_id"])
+
+    # confirm records the real size + checksum (from HEAD) and reveals it
+    c = service.confirm_upload("alice", r["memory_id"])
+    assert c["confirmed"] is True
+    assert c["size_bytes"] == 12345
+
     found = service.recall("alice", "cat photo", namespace="media")
     assert found["total"] == 1
     item = found["items"][0]
     assert item["kind"] == "image"
     assert item["content_type"] == "image/png"
-    assert item["content"] == "a photo of my cat"
+    assert item["size_bytes"] == 12345
 
-    # and a download URL comes back
     d = service.get_download_url("alice", r["memory_id"])
     assert d["url"].startswith("https://blob.local/")
-    assert d["content_type"] == "image/png"
 
 
 def test_media_is_private_to_owner(service):
     r = service.create_upload("alice", "secret.png", "image/png", "private diagram")
-    # another user can't see it or mint a download URL for alice's bytes
+    service.confirm_upload("alice", r["memory_id"])
+    # even confirmed, another user can't see it or mint a download URL
     with pytest.raises(ValueError):
         service.get_download_url("bob", r["memory_id"])
     assert service.recall("bob", "diagram", namespace="media")["total"] == 0
@@ -45,7 +51,6 @@ def test_media_is_private_to_owner(service):
 def test_forget_deletes_the_object(service):
     r = service.create_upload("alice", "cat.png", "image/png", "a cat")
     service.forget("alice", r["memory_id"])
-    # the pointer is gone AND the object was deleted (not just orphaned)
     assert r["object_key"] in service.ctx.blob_store.deleted
     with pytest.raises(ValueError):
         service.get_download_url("alice", r["memory_id"])
@@ -66,7 +71,6 @@ def test_create_upload_validates_inputs(service):
 
 def test_filename_is_stripped_of_path(service):
     r = service.create_upload("alice", "../../etc/passwd", "text/plain", "sneaky")
-    # object key stays under the user's prefix; no path traversal in the key
     assert r["object_key"] == f"alice/{r['memory_id']}/passwd"
 
 
@@ -107,6 +111,9 @@ async def test_media_tools_over_client(monkeypatch, fake_blob_store):
                 )
             ).data
             assert r["upload_url"].startswith("https://blob.local/")
+            assert "upload_fields" in r
+
+            await client.call_tool("confirm_upload", {"id": r["memory_id"]})
 
             recalled = (
                 await client.call_tool(

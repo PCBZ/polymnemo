@@ -19,6 +19,7 @@ EXPECTED_TOOLS = {
     "save_session",
     "load_session",
     "create_upload",
+    "confirm_upload",
     "get_download_url",
 }
 

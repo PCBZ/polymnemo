@@ -39,6 +39,10 @@ class Memory:
     content_type: str | None = None
     size_bytes: int | None = None
     checksum: str | None = None
+    # Media memories start unconfirmed (bytes not uploaded yet, #50) and are
+    # hidden from recall/list until confirm_upload verifies the object. Text
+    # memories are born confirmed.
+    confirmed: bool = True
     created_at: datetime | None = None
     updated_at: datetime | None = None
     # Populated only on search results (cosine similarity; higher = closer).

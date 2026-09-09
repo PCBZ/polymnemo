@@ -28,11 +28,17 @@ class FakeBlobStore:
     def __init__(self) -> None:
         self.deleted: list[str] = []
 
-    def presign_put(self, object_key: str, content_type: str) -> str:
-        return f"{self._BASE}/{object_key}?method=PUT&content_type={content_type}"
+    def presign_post(self, object_key: str, content_type: str, max_bytes: int) -> dict:
+        return {
+            "url": f"{self._BASE}/{object_key}",
+            "fields": {"Content-Type": content_type, "x-max-bytes": str(max_bytes)},
+        }
 
     def presign_get(self, object_key: str) -> str:
         return f"{self._BASE}/{object_key}?method=GET"
+
+    def head(self, object_key: str) -> tuple[int, str]:
+        return (12345, "fake-etag")  # simulates a successfully uploaded object
 
     def delete(self, object_key: str) -> None:
         self.deleted.append(object_key)

@@ -39,14 +39,17 @@ class S3BlobStore:
             region_name=region,
         )
 
-    def presign_put(self, object_key: str, content_type: str) -> str:
-        return self._client.generate_presigned_url(
-            "put_object",
-            Params={
-                "Bucket": self._bucket,
-                "Key": object_key,
-                "ContentType": content_type,
-            },
+    def presign_post(self, object_key: str, content_type: str, max_bytes: int) -> dict:
+        # content-length-range makes the store reject oversized uploads at PUT
+        # time (a presigned PUT can't cap size).
+        return self._client.generate_presigned_post(
+            Bucket=self._bucket,
+            Key=object_key,
+            Fields={"Content-Type": content_type},
+            Conditions=[
+                {"Content-Type": content_type},
+                ["content-length-range", 1, max_bytes],
+            ],
             ExpiresIn=self._ttl,
         )
 
@@ -56,6 +59,15 @@ class S3BlobStore:
             Params={"Bucket": self._bucket, "Key": object_key},
             ExpiresIn=self._ttl,
         )
+
+    def head(self, object_key: str) -> tuple[int, str]:
+        from botocore.exceptions import ClientError
+
+        try:
+            resp = self._client.head_object(Bucket=self._bucket, Key=object_key)
+        except ClientError as exc:
+            raise BlobError(f"object {object_key} not found — upload it first.") from exc
+        return int(resp["ContentLength"]), str(resp.get("ETag", "")).strip('"')
 
     def delete(self, object_key: str) -> None:
         self._client.delete_object(Bucket=self._bucket, Key=object_key)

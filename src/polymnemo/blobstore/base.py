@@ -21,12 +21,21 @@ class BlobError(Exception):
 
 @runtime_checkable
 class BlobStore(Protocol):
-    def presign_put(self, object_key: str, content_type: str) -> str:
-        """A short-lived URL the client PUTs bytes to (direct upload)."""
+    def presign_post(
+        self, object_key: str, content_type: str, max_bytes: int
+    ) -> dict:
+        """A short-lived presigned **POST** for direct upload, returning
+        ``{"url", "fields"}``. A ``content-length-range`` condition caps the size
+        so the store itself rejects an oversized upload (#50)."""
         ...
 
     def presign_get(self, object_key: str) -> str:
         """A short-lived URL the client GETs bytes from (direct download)."""
+        ...
+
+    def head(self, object_key: str) -> tuple[int, str]:
+        """Return ``(size_bytes, checksum)`` for an uploaded object; raise
+        :class:`BlobError` if it doesn't exist (used to confirm an upload)."""
         ...
 
     def delete(self, object_key: str) -> None:

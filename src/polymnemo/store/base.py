@@ -58,6 +58,14 @@ class Store(Protocol):
         """Replace content + embedding of an existing memory; ``None`` if absent."""
         ...
 
+    def confirm_media(
+        self, user_id: str, memory_id: str, size_bytes: int, checksum: str
+    ) -> "Memory | None":
+        """Mark a media memory confirmed and record its size/checksum, so
+        ``search`` / ``list`` / ``count`` start returning it (#50). ``None`` if
+        the memory isn't found / not owned."""
+        ...
+
     def delete(self, user_id: str, memory_id: str) -> bool:
         """Delete a memory; return whether a row was removed."""
         ...

@@ -115,6 +115,9 @@ class Settings(BaseSettings):
     blob_access_key_id: str = ""
     blob_secret_access_key: str = ""
     blob_url_ttl: int = 900  # presigned-URL lifetime, seconds
+    # Max upload size (bytes) enforced by the store via the presigned POST's
+    # content-length-range. Default 25 MiB.
+    blob_max_bytes: int = 25 * 1024 * 1024
 
     # --- Auth ----------------------------------------------------------------
     # "bearer" (per-user keys, the real scheme) or "static" (dev, single user).

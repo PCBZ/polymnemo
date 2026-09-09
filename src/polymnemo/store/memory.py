@@ -65,7 +65,11 @@ class InMemoryStore:
     ) -> list[Memory]:
         scored: list[tuple[float, Memory]] = []
         for mem, emb in self._rows.values():
-            if mem.namespace != namespace or not self._readable(mem, user_id):
+            if (
+                mem.namespace != namespace
+                or not self._readable(mem, user_id)
+                or not mem.confirmed
+            ):
                 continue
             scored.append((_cosine(embedding, emb), mem))
         scored.sort(key=lambda pair: pair[0], reverse=True)
@@ -86,7 +90,9 @@ class InMemoryStore:
         rows = [
             mem
             for mem, _ in self._rows.values()
-            if mem.namespace == namespace and self._readable(mem, user_id)
+            if mem.namespace == namespace
+            and self._readable(mem, user_id)
+            and mem.confirmed
         ]
         rows.sort(key=lambda m: (m.created_at or utcnow()), reverse=True)
         return [self._clone(m) for m in rows[offset : offset + limit]]
@@ -114,11 +120,26 @@ class InMemoryStore:
         del self._rows[memory_id]
         return True
 
+    def confirm_media(
+        self, user_id: str, memory_id: str, size_bytes: int, checksum: str
+    ) -> Memory | None:
+        row = self._rows.get(memory_id)
+        if row is None or row[0].user_id != user_id:
+            return None
+        mem = row[0]
+        mem.confirmed = True
+        mem.size_bytes = size_bytes
+        mem.checksum = checksum
+        mem.updated_at = utcnow()
+        return self._clone(mem)
+
     def count(self, user_id: str, namespace: str) -> int:
         return sum(
             1
             for mem, _ in self._rows.values()
-            if mem.namespace == namespace and self._readable(mem, user_id)
+            if mem.namespace == namespace
+            and self._readable(mem, user_id)
+            and mem.confirmed
         )
 
     def get_session(self, user_id: str, session_id: str) -> list[Memory]:

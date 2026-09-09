@@ -144,6 +144,31 @@ def test_media_memory_round_trips(store):
     assert got.to_public()["kind"] == "image"
 
 
+def test_unconfirmed_media_hidden_until_confirmed(store):
+    m = Memory(
+        id=new_id(),
+        user_id="alice",
+        namespace="media",
+        content="a cat photo",
+        kind="image",
+        object_key="alice/x/cat.png",
+        content_type="image/png",
+        confirmed=False,
+    )
+    store.add(m, _vec((0, 1.0)))
+    # hidden from search / list / count while unconfirmed...
+    assert store.count("alice", "media") == 0
+    assert store.list("alice", "media", limit=5) == []
+    assert store.search("alice", "media", _vec((0, 1.0)), limit=5) == []
+    # ...but fetchable by id (needed to confirm)
+    assert store.get("alice", m.id) is not None
+
+    store.confirm_media("alice", m.id, 999, "etag123")
+    assert store.count("alice", "media") == 1
+    got = store.get("alice", m.id)
+    assert got.confirmed and got.size_bytes == 999 and got.checksum == "etag123"
+
+
 def test_shared_vs_private(store):
     shared = _mem(user_id="alice", namespace="shared", content="team fact")
     private = _mem(user_id="alice", namespace="diary", content="secret")
