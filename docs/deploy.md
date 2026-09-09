@@ -42,6 +42,32 @@ The image build clones the public repo, so the build's `context_access_token` is
 the workflow's short-lived `GITHUB_TOKEN` — no extra secret. (A private repo
 would need a real PAT here instead.)
 
+## Failover: deploy to GCP (backup, manual only)
+
+`deploy gcp (backup)` (`.github/workflows/deploy-gcp.yml`) is a dormant failover
+to Cloud Run — `workflow_dispatch` only, never auto-triggered. It applies **only**
+the `gcp/` root and assumes the shared `neon` + `r2` (and `schema.sql`) already
+exist from the Azure deploy; it reads that shared state from Azure Storage, so it
+needs **both** GCP auth **and** the `ARM_*` secrets.
+
+One-time setup (in addition to the Azure secrets):
+
+1. **Service account** — create a GCP SA with roles: `roles/run.admin`,
+   `roles/cloudbuild.builds.editor`, `roles/artifactregistry.admin`,
+   `roles/iam.serviceAccountUser`, `roles/serviceusage.serviceUsageAdmin`.
+   Download a JSON key.
+2. **Secrets/variables**:
+   ```bash
+   gh secret set GCP_SA_KEY < path/to/key.json      # the SA JSON key
+   gh variable set GCP_PROJECT_ID --body "<project>"
+   ```
+   (WIF / OIDC is the more secure alternative to a long-lived key — a follow-up.)
+3. **Run it** — Actions → *deploy gcp (backup)* → Run workflow. It bootstraps the
+   Artifact Registry, builds the image with `gcloud builds submit` (tagged with
+   the commit SHA), and deploys Cloud Run against the same shared Neon + R2 as
+   Azure. It sets `publish_mcp_endpoint = false`, so it does **not** overwrite the
+   registered (Azure) `MCP_ENDPOINT`.
+
 The rest of this doc describes the same variables for a **local** apply.
 
 ## Variables you actually set

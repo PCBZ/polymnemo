@@ -1,14 +1,19 @@
-# GCP compute: Cloud Run, reading the SHARED Neon connection string from the
-# neon root's state. Apply the neon root (and its schema.sql) first.
+# GCP compute: Cloud Run — the BACKUP deploy path (primary is Azure). Reads the
+# SHARED Neon + R2 state from the Azure Storage backend, so it needs ARM_* creds
+# just to read it. Usually run by the manual .github/workflows/deploy-gcp.yml.
+# Assumes neon/ + r2/ (and schema.sql) are already provisioned by the Azure deploy.
 #
-# Usage:
-#   1. (once) apply deploy/terraform/neon + its schema.sql
-#   2. cp terraform.tfvars.example terraform.tfvars   # project_id, region, api_keys
-#   3. terraform init && terraform apply               # bootstrap: APIs + registry
-#   4. REPO="$(terraform output -raw image_repo)"
-#      gcloud builds submit ../../../ --tag "$REPO/polymnemo:v1"
-#   5. terraform apply -var "image=$REPO/polymnemo:v1"
-#   6. terraform output -raw mcp_endpoint
+# Manual flow (state is in Azure Storage — pass -backend-config at init):
+#   1. terraform init \
+#        -backend-config=resource_group_name=<rg> \
+#        -backend-config=storage_account_name=<sa> \
+#        -backend-config=container_name=tfstate \
+#        -backend-config=key=gcp.tfstate
+#   2. terraform apply                                 # bootstrap: APIs + registry
+#   3. REPO="$(terraform output -raw image_repo)"
+#      gcloud builds submit ../../../ --tag "$REPO/polymnemo:$(git rev-parse HEAD)"
+#   4. terraform apply -var "image=$REPO/polymnemo:$(git rev-parse HEAD)"
+#   5. terraform output -raw mcp_endpoint
 
 # The shared neon/ and r2/ roots keep their state in the Azure Storage backend
 # (see neon/versions.tf), so this root reads them from there too — meaning a GCP
@@ -56,9 +61,10 @@ module "cloud_run" {
 
 # Auto-fill the deployed /mcp endpoint into a GitHub Actions variable, so the
 # registry-publish workflow can put it into server.json on release — no manual
-# copy of the URL. Only once the service exists (image set).
+# copy of the URL. Only once the service exists (image set), and only when this
+# deploy should own the registered endpoint (the backup GCP path opts out).
 resource "github_actions_variable" "mcp_endpoint" {
-  count         = var.image == "" ? 0 : 1
+  count         = var.image != "" && var.publish_mcp_endpoint ? 1 : 0
   repository    = var.github_repository
   variable_name = "MCP_ENDPOINT"
   value         = module.cloud_run.mcp_endpoint

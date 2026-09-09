@@ -39,6 +39,12 @@ variable "github_repository" {
   description = "GitHub repository name under github_owner."
 }
 
+variable "publish_mcp_endpoint" {
+  type        = bool
+  default     = true
+  description = "Write the deployed /mcp URL into the MCP_ENDPOINT Actions variable (for registry-publish). The BACKUP GCP workflow sets this false so it doesn't hijack the primary (Azure) endpoint, and so the github provider needs no token."
+}
+
 # --- Remote-state backend (Azure Storage) — the shared neon/ + r2/ state lives
 # here, so this root reads it from there (needs ARM_* creds to read). Same values
 # used at `terraform init -backend-config`. ----------------------------------

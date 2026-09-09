@@ -10,6 +10,12 @@ terraform {
       version = "~> 6.0"
     }
   }
+
+  # Own state in the same Azure Storage backend as the rest, so the backup GCP
+  # deploy workflow can persist it. Coordinates via `-backend-config` at init.
+  backend "azurerm" {
+    key = "gcp.tfstate"
+  }
 }
 
 provider "google" {

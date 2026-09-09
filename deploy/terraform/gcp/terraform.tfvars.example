@@ -1,9 +1,16 @@
 # Copy to terraform.tfvars and fill in. terraform.tfvars and state hold secrets —
-# both are gitignored. Apply the neon root first (this reads its state).
+# both are gitignored. This is the BACKUP path (primary is Azure). The shared
+# neon/ + r2/ state must already exist; state lives in the Azure Storage backend
+# (pass -backend-config at init — see the main.tf header), so you also need ARM_*
+# creds just to read it.
 
 project_id = "your-gcp-project-id"
 region     = "us-west1"
 api_keys   = "sk-alice-secret:alice,sk-bob-secret:bob"
+
+# The backup workflow sets this false so it doesn't overwrite the primary
+# (Azure) MCP_ENDPOINT. Leave it true for a standalone GCP-as-primary apply.
+# publish_mcp_endpoint = false
 
 # Leave `image` unset for the first (bootstrap) apply; set it after build & push:
 # image = "us-west1-docker.pkg.dev/your-gcp-project-id/polymnemo/polymnemo:v1"
