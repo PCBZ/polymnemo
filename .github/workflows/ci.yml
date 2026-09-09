@@ -50,4 +50,24 @@ jobs:
       - name: Apply schema
         run: psql "$TEST_DATABASE_URL" -f scripts/schema.sql
       - name: Run tests
-        run: pytest
+        run: pytest --cov-report=json --junitxml=pytest.xml
+      - name: Test + coverage summary
+        if: always() # summarize even when tests fail
+        run: |
+          python - <<'PY' >> "$GITHUB_STEP_SUMMARY"
+          import json, xml.etree.ElementTree as ET
+
+          root = ET.parse("pytest.xml").getroot()
+          suite = root.find("testsuite") if root.tag == "testsuites" else root
+          total = int(suite.get("tests", 0))
+          failed = int(suite.get("failures", 0))
+          errors = int(suite.get("errors", 0))
+          skipped = int(suite.get("skipped", 0))
+          passed = total - failed - errors - skipped
+          cov = json.load(open("coverage.json"))["totals"]["percent_covered"]
+
+          print("## Test results\n")
+          print("| ✅ Passed | ❌ Failed | ⚠️ Errors | ⏭️ Skipped | 📊 Coverage |")
+          print("|---|---|---|---|---|")
+          print(f"| {passed} | {failed} | {errors} | {skipped} | {cov:.1f}% |")
+          PY
