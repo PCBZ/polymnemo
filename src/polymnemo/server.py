@@ -146,9 +146,7 @@ def forget(id: str) -> dict:
 @mcp.tool(annotations={"readOnlyHint": False, "destructiveHint": False})
 @tool_errors
 @rate_limited(cost=2)
-def save_session(
-    session_id: str, content: str, namespace: str | None = None
-) -> dict:
+def save_session(session_id: str, content: str, namespace: str | None = None) -> dict:
     """Persist a session's full content under `session_id` for later reload.
 
     Content is stored as ordered, losslessly-reassemblable chunks (also embedded,
@@ -186,8 +184,8 @@ def create_upload(
     is findable via `recall`. **PUT** the raw bytes to `upload_url` sending
     `upload_headers` (the signed Content-Type). **Then call `confirm_upload`** —
     the memory stays hidden from `recall` (and the size cap is enforced) until you
-    do. Media defaults to a private namespace.
-    Returns `{memory_id, object_key, upload_url, upload_headers, content_type, namespace}`.
+    do. Media defaults to a private namespace. Returns
+    `{memory_id, object_key, upload_url, upload_headers, content_type, namespace}`.
     """
     return app.service.create_upload(
         current_user(), filename, content_type, description, namespace=namespace

@@ -7,7 +7,7 @@ canonical per-user ``BearerKeyAuth`` arrives in #5.
 
 from __future__ import annotations
 
-from typing import Mapping
+from collections.abc import Mapping
 
 
 class StaticAuth:
@@ -16,5 +16,5 @@ class StaticAuth:
     def __init__(self, user_id: str = "local") -> None:
         self.user_id = user_id
 
-    def authenticate(self, headers: Mapping[str, str]) -> str:  # noqa: ARG002
+    def authenticate(self, headers: Mapping[str, str]) -> str:
         return self.user_id

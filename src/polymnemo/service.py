@@ -75,7 +75,7 @@ class MemoryService:
         embeddings = self.ctx.embedder.embed_documents(chunks)
 
         ids: list[str] = []
-        for chunk, embedding in zip(chunks, embeddings):
+        for chunk, embedding in zip(chunks, embeddings, strict=True):
             memory = Memory(
                 id=new_id(),
                 user_id=user_id,

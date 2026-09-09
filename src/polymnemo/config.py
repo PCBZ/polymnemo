@@ -82,7 +82,9 @@ class Settings(BaseSettings):
     media_namespace: str = "media"
 
     def parse_shared_namespaces(self) -> frozenset[str]:
-        return frozenset(n.strip() for n in self.shared_namespaces.split(",") if n.strip())
+        return frozenset(
+            n.strip() for n in self.shared_namespaces.split(",") if n.strip()
+        )
 
     # --- Recall / list -------------------------------------------------------
     # Default page sizes; the client decides whether to page further.
@@ -96,7 +98,7 @@ class Settings(BaseSettings):
     ratelimit_per_min: int = 600
 
     @model_validator(mode="after")
-    def _check_ratelimit(self) -> "Settings":
+    def _check_ratelimit(self) -> Settings:
         if self.ratelimit_enabled and self.ratelimit_per_min < MAX_TOOL_COST:
             raise ValueError(
                 f"POLYMNEMO_RATELIMIT_PER_MIN ({self.ratelimit_per_min}) must be "

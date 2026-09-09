@@ -5,4 +5,4 @@ from .memory import InMemoryStore
 # pgvector at import time, so it is imported lazily (from .store.postgres) only
 # when a database is configured. Base install (in-memory) needs neither.
 
-__all__ = ["Store", "InMemoryStore"]
+__all__ = ["InMemoryStore", "Store"]

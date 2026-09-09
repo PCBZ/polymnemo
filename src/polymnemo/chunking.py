@@ -31,7 +31,8 @@ def _build_splitter(*, overlap: int, trim: bool):
     """Build a TextSplitter for the active backend.
 
     Real backend: token-bounded via the shared model tokenizer. Stub backend
-    (offline dev/tests): a character splitter approximating tokens by ``_CHARS_PER_TOKEN``.
+    (offline dev/tests): a character splitter approximating tokens by
+    ``_CHARS_PER_TOKEN``.
     """
     from semantic_text_splitter import TextSplitter
 

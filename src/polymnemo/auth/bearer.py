@@ -7,7 +7,7 @@ shared token would make namespaces meaningless.
 
 from __future__ import annotations
 
-from typing import Mapping
+from collections.abc import Mapping
 
 from .base import AuthError
 

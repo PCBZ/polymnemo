@@ -1,3 +1,3 @@
 from .base import BlobError, BlobStore
 
-__all__ = ["BlobStore", "BlobError"]
+__all__ = ["BlobError", "BlobStore"]
