@@ -8,3 +8,8 @@ api_keys              = "sk-alice-secret:alice,sk-bob-secret:bob"
 
 # Leave `image` unset for the first (bootstrap) apply; set it after build & push:
 # image = "polymnemoacr123.azurecr.io/polymnemo:v1"
+
+# --- Media (Cloudflare R2) --------------------------------------------------
+# Media is always on. Apply the shared deploy/terraform/r2 root FIRST (it owns
+# the ONE bucket both clouds share) — this root reads its state. No variable
+# here; the bucket/creds flow in automatically.

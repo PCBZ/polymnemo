@@ -14,3 +14,8 @@ api_keys   = "sk-alice-secret:alice,sk-bob-secret:bob"
 # (for the registry-publish workflow), export a GitHub token before `apply`:
 #   export GITHUB_TOKEN=<token with repo + actions:write on PCBZ/polymnemo>
 # github_owner / github_repository default to PCBZ / polymnemo.
+
+# --- Media (Cloudflare R2) --------------------------------------------------
+# Media is always on. Apply the shared deploy/terraform/r2 root FIRST (it owns
+# the ONE bucket both clouds share) — this root reads its state. No variable
+# here; the bucket/creds flow in automatically.
