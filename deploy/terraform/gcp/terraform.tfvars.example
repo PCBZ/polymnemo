@@ -15,7 +15,8 @@ api_keys   = "sk-alice-secret:alice,sk-bob-secret:bob"
 #   export GITHUB_TOKEN=<token with repo + actions:write on PCBZ/polymnemo>
 # github_owner / github_repository default to PCBZ / polymnemo.
 
-# --- Media (Cloudflare R2), optional ----------------------------------------
-# Media is off by default. To turn it on: apply the shared deploy/terraform/r2
-# root first (it owns the ONE bucket both clouds share), then set:
-# media_enabled = true
+# --- Media (Cloudflare R2) --------------------------------------------------
+# Media is ON by default, so apply the shared deploy/terraform/r2 root first
+# (it owns the ONE bucket both clouds share) — this root reads its state.
+# For a database-only deploy (no Cloudflare), turn it off:
+# media_enabled = false

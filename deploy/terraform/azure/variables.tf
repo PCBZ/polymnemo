@@ -40,6 +40,6 @@ variable "api_keys" {
 
 variable "media_enabled" {
   type        = bool
-  default     = false
-  description = "Turn the media tools on by reading the shared r2/ root's state (the bucket + S3 creds). Requires the r2/ root applied first. Default false = media off (no Cloudflare dependency)."
+  default     = true
+  description = "Media tools ON by default: the compute root reads the shared r2/ root's state (bucket + S3 creds), so you must apply the r2/ root first. Set false for a database-only deploy (no Cloudflare dependency)."
 }
