@@ -160,38 +160,20 @@ npx @modelcontextprotocol/inspector
 
 ## Tools
 
-The MCP tools polymnemo exposes. See [Concepts](#concepts) for how keys,
-namespaces, and chunking work.
+polymnemo exposes MCP tools for storing, searching, and managing memories:
 
-| Tool | Arguments | Returns |
-|------|-----------|---------|
-| `ping` | — | `{ok, server, version, layers}` |
-| `remember` | `content`, `namespace?`, `tags?`, `source?` | `{ids, chunks, namespace}` |
-| `recall` | `query`, `namespace?`, `limit=8`, `cursor?` | `{items, total, has_more, next_cursor}` |
-| `list_memories` | `namespace?`, `limit=20`, `cursor?` | `{items, total, has_more, next_cursor}` |
-| `get_memory` | `id` | the memory |
-| `update` | `id`, `content` | the updated memory |
-| `forget` | `id` | `{id, deleted}` |
-| `save_session` | `session_id`, `content`, `namespace?` | `{session_id, chunks, chars, namespace}` |
-| `load_session` | `session_id`, `page=0`, `page_size=8000` | `{session_id, content, page, page_size, total_chars, has_more}` |
-| `create_upload` | `filename`, `content_type`, `description`, `namespace?` | `{memory_id, object_key, upload_url, upload_headers, …}` |
-| `confirm_upload` | `id` | `{memory_id, confirmed, size_bytes, content_type}` |
-| `get_download_url` | `id` | `{memory_id, url, content_type}` |
+- **Memory** — `remember`, `recall`, `list_memories`, `get_memory`, `update`, `forget`
+- **Sessions** — `save_session`, `load_session`
+- **Media** — `create_upload`, `confirm_upload`, `get_download_url`
 
-`recall` returns the nearest chunks by similarity, paged with `next_cursor` /
-`has_more`. Sessions store a full transcript that `load_session` reconstructs
-verbatim.
+Plus a `ping` health check and a `memory://{namespace}` resource for
+auto-injecting a collection. Media bytes go to object storage via presigned URLs
+— never through the MCP channel — with only a searchable description embedded
+(needs the `blob` extra).
 
-**Media memories** (files, images, video) keep the bytes in object storage, not
-the database: `create_upload` returns a presigned URL you PUT the bytes to,
-`confirm_upload` records the real size/checksum and reveals it, and
-`get_download_url` mints a short-lived download link. The bytes never cross the
-MCP channel — only a searchable `description` is embedded — and media defaults to
-a private namespace (`media`). Requires the `blob` extra + object storage (see
-Configuration).
-
-**Resource** — `memory://{namespace}` exposes a namespace's memories (same shape
-as `list_memories`) so a client can auto-inject the collection.
+Full arguments and return shapes live in the dedicated **MCP tools reference**
+*(coming soon)*. See [Concepts](#concepts) for how keys, namespaces, and chunking
+work.
 
 ## Configuration
 
