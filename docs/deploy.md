@@ -10,6 +10,34 @@ so memories and media are shared across clouds.
 Most configuration is either baked into the image or wired automatically; you
 set only a handful of variables.
 
+Terraform state lives in an **Azure Storage** backend (so CI and multiple
+operators share it); the storage account/container are passed at
+`terraform init -backend-config` time, not hardcoded.
+
+## Deploy from CI (GitHub Actions — Azure)
+
+The `deploy (azure)` workflow (`.github/workflows/deploy.yml`) runs the whole
+chain from GitHub Secrets/Variables — nothing lands in `.env`/`tfvars`. One-time
+setup:
+
+1. **Service principal** — `az ad sp create-for-rbac --role Contributor --scopes
+   /subscriptions/<sub>` → its `appId`/`password`/`tenant` + the subscription id
+   become the `ARM_*` secrets.
+2. **Push secrets** — fill `scripts/github-secrets.env` (copied from the
+   `.template`) and run `bash scripts/setup-github-secrets.sh`. Sets the 8
+   secrets (`ARM_*`, `NEON_API_KEY`, `CLOUDFLARE_API_TOKEN`, `CF_ACCOUNT_ID`,
+   `POLYMNEMO_API_KEYS`) + the `ACR_NAME` variable.
+3. **State storage** — `az login`, then `bash scripts/bootstrap-tfstate-azure.sh`.
+   Creates the state storage account/container and publishes
+   `TFSTATE_RESOURCE_GROUP` / `TFSTATE_STORAGE_ACCOUNT` / `TFSTATE_CONTAINER` as
+   GitHub variables.
+4. **Run it** — Actions tab → *deploy (azure)* → Run workflow. It applies
+   `neon` → schema → `r2` → builds the image → applies `azure`, and prints the
+   MCP endpoint. Re-runnable (shared remote state); `concurrency` blocks
+   overlapping runs.
+
+The rest of this doc describes the same variables for a **local** apply.
+
 ## Variables you actually set
 
 **GCP path — 5 values (+ 1 env token):**

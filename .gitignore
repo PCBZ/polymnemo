@@ -223,6 +223,9 @@ __marimo__/
 # GitHub App credentials (run-gemini-cli)
 gha-creds-*.json
 
+# Filled GitHub-secrets file (real secrets). The .template stays tracked.
+scripts/github-secrets.env
+
 # Terraform (per-root: neon/ gcp/ azure/). Lock files (.terraform.lock.hcl) stay tracked.
 deploy/terraform/**/.terraform/
 deploy/terraform/**/*.tfstate

@@ -38,3 +38,23 @@ variable "api_keys" {
   description = "Per-user keys \"key1:alice,key2:bob\", injected as POLYMNEMO_API_KEYS."
 }
 
+# --- Remote-state backend (Azure Storage) — where the neon/ and r2/ roots' state
+# lives, so this root can read it via terraform_remote_state. Same values used at
+# `terraform init -backend-config`. The deploy workflow sets these from GitHub
+# variables the bootstrap script created. ------------------------------------
+variable "tfstate_resource_group" {
+  type        = string
+  description = "Resource group holding the Terraform-state storage account."
+}
+
+variable "tfstate_storage_account" {
+  type        = string
+  description = "Storage account holding the Terraform state."
+}
+
+variable "tfstate_container" {
+  type        = string
+  default     = "tfstate"
+  description = "Blob container holding the Terraform state."
+}
+

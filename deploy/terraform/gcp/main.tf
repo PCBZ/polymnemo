@@ -10,23 +10,27 @@
 #   5. terraform apply -var "image=$REPO/polymnemo:v1"
 #   6. terraform output -raw mcp_endpoint
 
-# Reads the shared Neon root's state over a LOCAL relative path — this requires
-# all three roots in one checkout, applied on one machine, neon applied first.
-# For CI or a second operator, a shared remote backend is REQUIRED (see neon/versions.tf).
+# The shared neon/ and r2/ roots keep their state in the Azure Storage backend
+# (see neon/versions.tf), so this root reads them from there too — meaning a GCP
+# deploy needs Azure credentials (ARM_* env) just to READ the shared state.
+# Apply neon/ and r2/ before this root.
 data "terraform_remote_state" "neon" {
-  backend = "local"
+  backend = "azurerm"
   config = {
-    path = "../neon/terraform.tfstate"
+    resource_group_name  = var.tfstate_resource_group
+    storage_account_name = var.tfstate_storage_account
+    container_name       = var.tfstate_container
+    key                  = "neon.tfstate"
   }
 }
 
-# The SHARED media bucket + S3 creds, from the r2/ root's state — the same
-# read-only pattern as the neon data source above, so GCP and Azure use the
-# *same* R2. Media is always on: apply the r2/ root before this one.
 data "terraform_remote_state" "r2" {
-  backend = "local"
+  backend = "azurerm"
   config = {
-    path = "../r2/terraform.tfstate"
+    resource_group_name  = var.tfstate_resource_group
+    storage_account_name = var.tfstate_storage_account
+    container_name       = var.tfstate_container
+    key                  = "r2.tfstate"
   }
 }
 

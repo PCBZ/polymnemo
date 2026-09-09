@@ -39,3 +39,22 @@ variable "github_repository" {
   description = "GitHub repository name under github_owner."
 }
 
+# --- Remote-state backend (Azure Storage) — the shared neon/ + r2/ state lives
+# here, so this root reads it from there (needs ARM_* creds to read). Same values
+# used at `terraform init -backend-config`. ----------------------------------
+variable "tfstate_resource_group" {
+  type        = string
+  description = "Resource group holding the Terraform-state storage account."
+}
+
+variable "tfstate_storage_account" {
+  type        = string
+  description = "Storage account holding the Terraform state."
+}
+
+variable "tfstate_container" {
+  type        = string
+  default     = "tfstate"
+  description = "Blob container holding the Terraform state."
+}
+

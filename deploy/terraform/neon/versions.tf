@@ -6,12 +6,14 @@ terraform {
       version = "~> 0.17" # pin: pre-1.0 provider, breaking changes land in minors
     }
   }
-  # Local state by default — fine ONLY for a single solo operator. The gcp/ and
-  # azure/ roots read this root's state via terraform_remote_state over a local
-  # relative path, which requires all three roots in one checkout, applied on one
-  # machine, neon first. For CI or a second operator a shared remote backend
-  # (GCS / Azure Storage) is REQUIRED, not optional: switch it here (and in the
-  # gcp/ + azure/ remote_state config) and run `terraform init -migrate-state`.
+  # State lives in Azure Storage so CI (and multiple operators) share it. The
+  # storage account/container/key come from `-backend-config` at init time (the
+  # deploy workflow and the bootstrap script pass them), so nothing here is
+  # environment-specific. Bootstrap the storage once with
+  # scripts/bootstrap-tfstate-azure.sh.
+  backend "azurerm" {
+    key = "neon.tfstate"
+  }
 }
 
 provider "neon" {
