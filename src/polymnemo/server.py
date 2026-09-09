@@ -198,11 +198,12 @@ def create_upload(
 @tool_errors
 @rate_limited(cost=1)
 def confirm_upload(id: str) -> dict:
-    """Confirm a media upload after you've POSTed the bytes.
+    """Confirm a media upload after you've PUT the bytes.
 
-    Verifies the object exists, records its real size + checksum, and makes the
-    memory findable via `recall` / downloadable. `id` is from `create_upload`.
-    Returns `{memory_id, confirmed, size_bytes, content_type}`.
+    Verifies the object exists, records its real size + checksum (and rejects an
+    over-limit upload), then makes the memory findable via `recall` /
+    downloadable. `id` is from `create_upload`. Returns
+    `{memory_id, confirmed, size_bytes, content_type}`.
     """
     return app.service.confirm_upload(current_user(), id)
 
