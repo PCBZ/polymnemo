@@ -10,6 +10,12 @@ terraform {
       version = "~> 0.12"
     }
   }
+
+  # State in Azure Storage (shared with CI); coordinates via `-backend-config`
+  # at init. Bootstrap once with scripts/bootstrap-tfstate-azure.sh.
+  backend "azurerm" {
+    key = "azure.tfstate"
+  }
 }
 
 provider "azurerm" {

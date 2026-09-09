@@ -8,12 +8,11 @@ terraform {
       version = "~> 5.0"
     }
   }
-  # Local state by default — fine ONLY for a single solo operator. The gcp/ and
-  # azure/ roots read this root's state via terraform_remote_state over a local
-  # relative path, which requires the roots in one checkout, applied on one
-  # machine, this root first. For CI or a second operator a shared remote backend
-  # is REQUIRED: switch it here (and in the gcp/ + azure/ remote_state config)
-  # and run `terraform init -migrate-state`.
+  # State in Azure Storage (shared with CI); coordinates via `-backend-config`
+  # at init. Bootstrap once with scripts/bootstrap-tfstate-azure.sh.
+  backend "azurerm" {
+    key = "r2.tfstate"
+  }
 }
 
 # Auth via the CLOUDFLARE_API_TOKEN env var (a token allowed to edit R2 + create

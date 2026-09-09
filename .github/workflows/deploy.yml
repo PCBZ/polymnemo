@@ -1,0 +1,126 @@
+name: deploy (azure)
+
+# Manual deploy to Azure Container Apps. All secrets come from GitHub
+# Secrets/Variables (see scripts/setup-github-secrets.sh and
+# scripts/bootstrap-tfstate-azure.sh); nothing is stored in the repo.
+#
+# Job graph (GitHub renders this live in the run's "graph" view):
+#
+#   neon --> schema --+
+#   r2 --------------+--> azure
+#
+# neon and r2 run in parallel. schema waits for neon; azure waits for r2 + schema
+# (neon is covered transitively via schema, and the app never starts before its
+# tables exist).
+on:
+  workflow_dispatch:
+    inputs:
+      image_tag:
+        description: "Image tag (optional; defaults to the commit SHA so each new commit rolls out)"
+        required: false
+        default: ""
+
+# Never let two deploys race the shared Terraform state.
+concurrency: deploy-azure
+
+permissions:
+  contents: read
+
+env:
+  # azurerm provider + backend auth (service principal).
+  ARM_CLIENT_ID: ${{ secrets.ARM_CLIENT_ID }}
+  ARM_CLIENT_SECRET: ${{ secrets.ARM_CLIENT_SECRET }}
+  ARM_TENANT_ID: ${{ secrets.ARM_TENANT_ID }}
+  ARM_SUBSCRIPTION_ID: ${{ secrets.ARM_SUBSCRIPTION_ID }}
+  # cloudflare provider auth (r2 root).
+  CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+  # Terraform input variables.
+  TF_VAR_neon_api_key: ${{ secrets.NEON_API_KEY }}
+  TF_VAR_cf_account_id: ${{ secrets.CF_ACCOUNT_ID }}
+  TF_VAR_api_keys: ${{ secrets.POLYMNEMO_API_KEYS }}
+  TF_VAR_azure_subscription_id: ${{ secrets.ARM_SUBSCRIPTION_ID }}
+  TF_VAR_acr_name: ${{ vars.ACR_NAME }}
+  TF_VAR_tfstate_resource_group: ${{ vars.TFSTATE_RESOURCE_GROUP }}
+  TF_VAR_tfstate_storage_account: ${{ vars.TFSTATE_STORAGE_ACCOUNT }}
+  TF_VAR_tfstate_container: ${{ vars.TFSTATE_CONTAINER }}
+  # Shared -backend-config (each job appends its own `key`).
+  TF_BACKEND: >-
+    -backend-config=resource_group_name=${{ vars.TFSTATE_RESOURCE_GROUP }}
+    -backend-config=storage_account_name=${{ vars.TFSTATE_STORAGE_ACCOUNT }}
+    -backend-config=container_name=${{ vars.TFSTATE_CONTAINER }}
+
+jobs:
+  neon:
+    name: neon (shared Postgres)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.13.2"
+      - name: Terraform apply
+        working-directory: deploy/terraform/neon
+        run: |
+          terraform init $TF_BACKEND -backend-config=key=neon.tfstate
+          terraform apply -auto-approve
+
+  r2:
+    name: r2 (shared media bucket)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.13.2"
+      - name: Terraform apply
+        working-directory: deploy/terraform/r2
+        run: |
+          terraform init $TF_BACKEND -backend-config=key=r2.tfstate
+          terraform apply -auto-approve
+
+  schema:
+    name: schema (apply schema.sql)
+    needs: [neon]
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.13.2"
+      # psql ships preinstalled on ubuntu-latest — no apt step needed.
+      - name: Apply schema.sql to Neon
+        working-directory: deploy/terraform/neon
+        run: |
+          terraform init $TF_BACKEND -backend-config=key=neon.tfstate
+          conn="$(terraform output -raw connection_uri)"
+          psql "$conn" -v ON_ERROR_STOP=1 -f ../../../scripts/schema.sql
+
+  azure:
+    name: azure (build image + deploy app)
+    needs: [r2, schema]
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      # Default the tag to the commit SHA so each new commit changes the app's
+      # image ref and actually rolls out a new revision (a static tag would
+      # rebuild in ACR but leave the app template unchanged -> no redeploy).
+      TF_VAR_image_tag: ${{ inputs.image_tag != '' && inputs.image_tag || github.sha }}
+      TF_VAR_context_access_token: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.13.2"
+      # Terraform builds the image IN ACR (no az/docker) and deploys it in one
+      # apply. `-replace` forces a fresh build each run (schedule_run_now
+      # otherwise runs only on create; harmless warning on the very first run).
+      - name: Terraform apply (build + deploy)
+        working-directory: deploy/terraform/azure
+        run: |
+          terraform init $TF_BACKEND -backend-config=key=azure.tfstate
+          terraform apply -auto-approve \
+            -replace=module.container_apps.azurerm_container_registry_task_schedule_run_now.build
+          echo "MCP endpoint: $(terraform output -raw mcp_endpoint)"
