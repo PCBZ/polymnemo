@@ -7,7 +7,8 @@ place that turns an incoming request into that identity.
 
 from __future__ import annotations
 
-from typing import Mapping, Protocol, runtime_checkable
+from collections.abc import Mapping
+from typing import Protocol, runtime_checkable
 
 
 class AuthError(Exception):

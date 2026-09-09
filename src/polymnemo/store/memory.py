@@ -13,9 +13,8 @@ update/delete their own memories, even in a shared namespace.
 from __future__ import annotations
 
 import math
-from collections.abc import Iterable
+from collections.abc import Iterable, Sequence
 from dataclasses import replace
-from typing import Sequence
 
 from ..models import Memory, utcnow
 
@@ -23,7 +22,7 @@ from ..models import Memory, utcnow
 def _cosine(a: Sequence[float], b: Sequence[float]) -> float:
     if not a or not b:
         return 0.0
-    dot = sum(x * y for x, y in zip(a, b))
+    dot = sum(x * y for x, y in zip(a, b, strict=True))
     na = math.sqrt(sum(x * x for x in a))
     nb = math.sqrt(sum(y * y for y in b))
     if na == 0.0 or nb == 0.0:
@@ -94,7 +93,7 @@ class InMemoryStore:
             and self._readable(mem, user_id)
             and mem.confirmed
         ]
-        rows.sort(key=lambda m: (m.created_at or utcnow()), reverse=True)
+        rows.sort(key=lambda m: m.created_at or utcnow(), reverse=True)
         return [self._clone(m) for m in rows[offset : offset + limit]]
 
     def update(
@@ -148,7 +147,7 @@ class InMemoryStore:
             for mem, _ in self._rows.values()
             if mem.user_id == user_id and mem.session_id == session_id
         ]
-        rows.sort(key=lambda m: (m.seq if m.seq is not None else 0))
+        rows.sort(key=lambda m: m.seq if m.seq is not None else 0)
         return [self._clone(m) for m in rows]
 
     def delete_session(self, user_id: str, session_id: str) -> int:
@@ -173,7 +172,7 @@ class InMemoryStore:
         # the swap itself is only failure-proof dict ops (delete + update).
         now = utcnow()
         new_rows: dict[str, tuple[Memory, list[float]]] = {}
-        for memory, embedding in zip(memories, embeddings):
+        for memory, embedding in zip(memories, embeddings, strict=True):
             if memory.created_at is None:
                 memory.created_at = now
             memory.updated_at = memory.created_at

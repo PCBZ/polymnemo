@@ -51,7 +51,9 @@ def test_private_namespace_is_isolated(service):
     service.remember("alice", "secret diary entry", namespace="diary")
     assert service.list_memories("bob", namespace="diary")["total"] == 0
     assert service.recall("bob", "diary", namespace="diary")["total"] == 0
-    assert service.list_memories("alice", namespace="diary")["total"] == 1  # owner sees it
+    assert (
+        service.list_memories("alice", namespace="diary")["total"] == 1
+    )  # owner sees it
 
 
 def test_empty_inputs_raise(service):

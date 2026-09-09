@@ -42,8 +42,12 @@ class AppContext:
             "store": type(self.store).__name__,
             "embedder": type(self.embedder).__name__,
             "retriever": type(self.retriever).__name__,
-            "rate_limiter": type(self.rate_limiter).__name__ if self.rate_limiter else "disabled",
-            "blob_store": type(self.blob_store).__name__ if self.blob_store else "disabled",
+            "rate_limiter": type(self.rate_limiter).__name__
+            if self.rate_limiter
+            else "disabled",
+            "blob_store": type(self.blob_store).__name__
+            if self.blob_store
+            else "disabled",
         }
 
 

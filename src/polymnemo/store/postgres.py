@@ -280,5 +280,5 @@ class PostgresStore:
                     session_id=memory.session_id,
                     seq=memory.seq,
                 )
-                for memory, embedding in zip(memories, embeddings)
+                for memory, embedding in zip(memories, embeddings, strict=True)
             )

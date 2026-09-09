@@ -7,7 +7,7 @@ cross-LLM recall). The model is pinned; changing it means re-embedding the store
 
 from __future__ import annotations
 
-from typing import Sequence
+from collections.abc import Sequence
 
 from ..config import settings
 

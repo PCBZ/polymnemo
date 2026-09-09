@@ -65,7 +65,9 @@ class S3BlobStore:
         try:
             resp = self._client.head_object(Bucket=self._bucket, Key=object_key)
         except ClientError as exc:
-            raise BlobError(f"object {object_key} not found — upload it first.") from exc
+            raise BlobError(
+                f"object {object_key} not found — upload it first."
+            ) from exc
         # ETag is opaque (may be MD5, or <md5>-<parts> for multipart); kept for
         # reference, not relied on as a content hash.
         return int(resp["ContentLength"]), str(resp.get("ETag", "")).strip('"')

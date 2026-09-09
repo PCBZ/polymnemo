@@ -3,6 +3,7 @@ from dataclasses import replace
 import pytest
 from fastmcp import Client
 from fastmcp.exceptions import ToolError
+from pydantic import ValidationError
 
 from polymnemo.ratelimit import GlobalRateLimiter, RateLimitError
 
@@ -26,7 +27,7 @@ def test_cost_weighting():
 def test_per_min_below_max_cost_is_rejected():
     from polymnemo.config import Settings
 
-    with pytest.raises(Exception):  # pydantic ValidationError
+    with pytest.raises(ValidationError):  # per_min must cover the max tool cost
         Settings(ratelimit_enabled=True, ratelimit_per_min=1)
     # a value that covers the max tool cost is fine
     assert Settings(ratelimit_enabled=True, ratelimit_per_min=2).ratelimit_per_min == 2

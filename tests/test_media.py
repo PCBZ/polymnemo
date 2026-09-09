@@ -105,9 +105,7 @@ def test_s3_blobstore_requires_config():
     from polymnemo.blobstore.s3 import S3BlobStore
 
     with pytest.raises(BlobError):
-        S3BlobStore(
-            bucket="", endpoint_url="", access_key_id="", secret_access_key=""
-        )
+        S3BlobStore(bucket="", endpoint_url="", access_key_id="", secret_access_key="")
 
 
 async def test_media_tools_over_client(monkeypatch, fake_blob_store):

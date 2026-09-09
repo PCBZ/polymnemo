@@ -8,7 +8,8 @@ the vector nearest-neighbour lookup. The canonical implementation is
 
 from __future__ import annotations
 
-from typing import Protocol, Sequence, runtime_checkable
+from collections.abc import Sequence
+from typing import Protocol, runtime_checkable
 
 from ..models import Memory
 
@@ -60,7 +61,7 @@ class Store(Protocol):
 
     def confirm_media(
         self, user_id: str, memory_id: str, size_bytes: int, checksum: str
-    ) -> "Memory | None":
+    ) -> Memory | None:
         """Mark a media memory confirmed and record its size/checksum, so
         ``search`` / ``list`` / ``count`` start returning it (#50). ``None`` if
         the memory isn't found / not owned."""

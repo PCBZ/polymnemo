@@ -1,4 +1,4 @@
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 from polymnemo.models import Memory, new_id
 from polymnemo.store import InMemoryStore
@@ -35,7 +35,7 @@ def test_search_ranks_by_similarity():
 
 def test_list_newest_first_and_pagination():
     store = InMemoryStore()
-    base = datetime(2020, 1, 1, tzinfo=timezone.utc)
+    base = datetime(2020, 1, 1, tzinfo=UTC)
     for i, c in enumerate(["1", "2", "3"]):
         store.add(_mem(content=c, created_at=base + timedelta(seconds=i)), [0.0, 0.0])
     page1 = store.list("alice", "shared", limit=2, offset=0)
