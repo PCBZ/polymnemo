@@ -2,7 +2,20 @@
 
 [![CI](https://github.com/PCBZ/polymnemo/actions/workflows/ci.yml/badge.svg)](https://github.com/PCBZ/polymnemo/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
-![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-blue.svg)
+
+![Python](https://img.shields.io/badge/Python_3.11%2B-3776AB?logo=python&logoColor=white)
+![MCP](https://img.shields.io/badge/MCP-FastMCP-000000?logo=modelcontextprotocol&logoColor=white)
+![Postgres](https://img.shields.io/badge/Postgres_%2B_pgvector-4169E1?logo=postgresql&logoColor=white)
+![Neon](https://img.shields.io/badge/Neon-008B47?logo=neon&logoColor=white)
+![SQLAlchemy](https://img.shields.io/badge/SQLAlchemy-D71F00?logo=sqlalchemy&logoColor=white)
+![Pydantic](https://img.shields.io/badge/Pydantic-E92063?logo=pydantic&logoColor=white)
+![Cloudflare R2](https://img.shields.io/badge/Cloudflare_R2-F38020?logo=cloudflare&logoColor=white)
+![Azure](https://img.shields.io/badge/Azure_Container_Apps-0078D4)
+![Cloud Run](https://img.shields.io/badge/Cloud_Run-4285F4?logo=googlecloud&logoColor=white)
+![Terraform](https://img.shields.io/badge/Terraform-844FBA?logo=terraform&logoColor=white)
+![Docker](https://img.shields.io/badge/Docker-2496ED?logo=docker&logoColor=white)
+![pytest](https://img.shields.io/badge/pytest-0A9EDC?logo=pytest&logoColor=white)
+![Ruff](https://img.shields.io/badge/Ruff-261230?logo=ruff&logoColor=white)
 
 **A shared long-term memory across any LLM, over [MCP](https://modelcontextprotocol.io).**
 
