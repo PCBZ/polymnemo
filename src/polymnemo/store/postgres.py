@@ -46,6 +46,7 @@ class MemoryRow(Base):
     content_type: Mapped[str | None] = mapped_column(default=None)
     size_bytes: Mapped[int | None] = mapped_column(default=None)
     checksum: Mapped[str | None] = mapped_column(default=None)
+    confirmed: Mapped[bool] = mapped_column(default=True)
     created_at: Mapped[datetime] = mapped_column(server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(server_default=func.now())
 
@@ -64,6 +65,7 @@ class MemoryRow(Base):
             content_type=self.content_type,
             size_bytes=self.size_bytes,
             checksum=self.checksum,
+            confirmed=self.confirmed,
             created_at=self.created_at,
             updated_at=self.updated_at,
             score=score,
@@ -121,6 +123,7 @@ class PostgresStore:
                     content_type=memory.content_type,
                     size_bytes=memory.size_bytes,
                     checksum=memory.checksum,
+                    confirmed=memory.confirmed,
                 )
             )
         return memory.id
@@ -132,6 +135,25 @@ class PostgresStore:
             update(MemoryRow)
             .where(MemoryRow.id == memory_id, MemoryRow.user_id == user_id)
             .values(content=content, embedding=list(embedding), updated_at=func.now())
+            .returning(MemoryRow)
+            .execution_options(synchronize_session=False)
+        )
+        with Session(self._engine) as session, session.begin():
+            row = session.execute(stmt).scalar_one_or_none()
+            return row.to_memory() if row else None
+
+    def confirm_media(
+        self, user_id: str, memory_id: str, size_bytes: int, checksum: str
+    ) -> Memory | None:
+        stmt = (
+            update(MemoryRow)
+            .where(MemoryRow.id == memory_id, MemoryRow.user_id == user_id)
+            .values(
+                confirmed=True,
+                size_bytes=size_bytes,
+                checksum=checksum,
+                updated_at=func.now(),
+            )
             .returning(MemoryRow)
             .execution_options(synchronize_session=False)
         )
@@ -170,7 +192,11 @@ class PostgresStore:
         distance = MemoryRow.embedding.cosine_distance(list(embedding))
         stmt = (
             select(MemoryRow, (1 - distance).label("score"))
-            .where(MemoryRow.namespace == namespace, self._visible(user_id))
+            .where(
+                MemoryRow.namespace == namespace,
+                self._visible(user_id),
+                MemoryRow.confirmed,
+            )
             .order_by(distance)
             .limit(limit)
             .offset(offset)
@@ -186,7 +212,11 @@ class PostgresStore:
     ) -> list[Memory]:
         stmt = (
             select(MemoryRow)
-            .where(MemoryRow.namespace == namespace, self._visible(user_id))
+            .where(
+                MemoryRow.namespace == namespace,
+                self._visible(user_id),
+                MemoryRow.confirmed,
+            )
             .order_by(MemoryRow.created_at.desc())
             .limit(limit)
             .offset(offset)
@@ -198,7 +228,11 @@ class PostgresStore:
         stmt = (
             select(func.count())
             .select_from(MemoryRow)
-            .where(MemoryRow.namespace == namespace, self._visible(user_id))
+            .where(
+                MemoryRow.namespace == namespace,
+                self._visible(user_id),
+                MemoryRow.confirmed,
+            )
         )
         with Session(self._engine) as session:
             return session.execute(stmt).scalar_one()

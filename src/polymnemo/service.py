@@ -262,8 +262,9 @@ class MemoryService:
 
         The bytes never pass through MCP: we embed the text ``description`` (so the
         file is findable via ``recall``), store a pointer (``object_key``) in
-        Postgres, and hand back a short-lived upload URL. The client uploads
-        straight to object storage.
+        Postgres, and hand back a short-lived upload URL. The memory stays
+        UNCONFIRMED — hidden from recall — until ``confirm_upload`` verifies the
+        object (and enforces the size cap).
         """
         if self.ctx.blob_store is None:
             raise ValueError(
@@ -288,6 +289,8 @@ class MemoryService:
         # Presign first, so a presign failure can't leave an orphan DB row.
         upload_url = self.ctx.blob_store.presign_put(object_key, content_type)
         embedding = self.ctx.embedder.embed_documents([description])[0]
+        # Stored UNCONFIRMED: hidden from recall/list until confirm_upload verifies
+        # the bytes were actually uploaded (no ghost memories).
         memory = Memory(
             id=memory_id,
             user_id=user_id,
@@ -296,17 +299,55 @@ class MemoryService:
             kind=_kind_from_content_type(content_type),
             object_key=object_key,
             content_type=content_type,
+            confirmed=False,
         )
         self.ctx.store.add(memory, embedding)
         return {
             "memory_id": memory_id,
             "object_key": object_key,
+            # PUT the bytes to upload_url with these headers, then confirm_upload.
             "upload_url": upload_url,
-            # The URL signs Content-Type, so the client MUST send this header on
-            # the PUT or object storage rejects it (403 SignatureDoesNotMatch).
             "upload_headers": {"Content-Type": content_type},
             "content_type": content_type,
             "namespace": ns,
+        }
+
+    def confirm_upload(self, user_id: str, memory_id: str) -> dict:
+        """Confirm a media upload: verify the object exists, enforce the size cap,
+        record its real size + checksum, and make the memory recall-able (#50)."""
+        if self.ctx.blob_store is None:
+            raise ValueError(
+                "blob storage is not configured — set POLYMNEMO_BLOB_BACKEND."
+            )
+        memory = self.ctx.store.get(user_id, memory_id)
+        if memory is None or not memory.object_key:
+            raise ValueError(f"no media upload with id '{memory_id}' for this user.")
+        try:
+            # Raises BlobError if the bytes were never uploaded.
+            size_bytes, checksum = self.ctx.blob_store.head(memory.object_key)
+        except BlobError as exc:
+            raise ValueError(str(exc)) from exc  # -> actionable ToolError
+
+        # Enforce the size cap here (a presigned PUT can't). Oversized -> clean up
+        # the object + the hidden row and reject.
+        if size_bytes > settings.blob_max_bytes:
+            self.ctx.blob_store.delete(memory.object_key)
+            self.ctx.store.delete(user_id, memory_id)
+            raise ValueError(
+                f"upload is {size_bytes} bytes, over the "
+                f"{settings.blob_max_bytes}-byte limit — rejected."
+            )
+
+        confirmed = self.ctx.store.confirm_media(
+            user_id, memory_id, size_bytes, checksum
+        )
+        if confirmed is None:
+            raise ValueError(f"no media upload with id '{memory_id}' for this user.")
+        return {
+            "memory_id": memory_id,
+            "confirmed": True,
+            "size_bytes": size_bytes,
+            "content_type": memory.content_type,
         }
 
     def get_download_url(self, user_id: str, memory_id: str) -> dict:
@@ -324,6 +365,11 @@ class MemoryService:
         if not memory.object_key:
             raise ValueError(
                 f"memory '{memory_id}' is not a media memory (it has no stored file)."
+            )
+        if not memory.confirmed:
+            raise ValueError(
+                f"media '{memory_id}' isn't confirmed yet — upload the bytes and "
+                "call confirm_upload first."
             )
         url = self.ctx.blob_store.presign_get(memory.object_key)
         return {"memory_id": memory_id, "url": url, "content_type": memory.content_type}

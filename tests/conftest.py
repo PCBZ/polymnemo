@@ -27,12 +27,20 @@ class FakeBlobStore:
 
     def __init__(self) -> None:
         self.deleted: list[str] = []
+        self.head_size = 12345  # tests bump this to trigger the size cap
 
     def presign_put(self, object_key: str, content_type: str) -> str:
         return f"{self._BASE}/{object_key}?method=PUT&content_type={content_type}"
 
     def presign_get(self, object_key: str) -> str:
         return f"{self._BASE}/{object_key}?method=GET"
+
+    def head(self, object_key: str) -> tuple[int, str]:
+        if self.head_size is None:  # simulate "bytes never uploaded"
+            from polymnemo.blobstore.base import BlobError
+
+            raise BlobError(f"object {object_key} not found — upload it first.")
+        return (self.head_size, "fake-etag")
 
     def delete(self, object_key: str) -> None:
         self.deleted.append(object_key)

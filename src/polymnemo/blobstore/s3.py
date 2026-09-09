@@ -40,6 +40,8 @@ class S3BlobStore:
         )
 
     def presign_put(self, object_key: str, content_type: str) -> str:
+        # PUT (not presigned POST): universally supported, incl. R2. Size is
+        # enforced at confirm via head(), not here.
         return self._client.generate_presigned_url(
             "put_object",
             Params={
@@ -56,6 +58,17 @@ class S3BlobStore:
             Params={"Bucket": self._bucket, "Key": object_key},
             ExpiresIn=self._ttl,
         )
+
+    def head(self, object_key: str) -> tuple[int, str]:
+        from botocore.exceptions import ClientError
+
+        try:
+            resp = self._client.head_object(Bucket=self._bucket, Key=object_key)
+        except ClientError as exc:
+            raise BlobError(f"object {object_key} not found — upload it first.") from exc
+        # ETag is opaque (may be MD5, or <md5>-<parts> for multipart); kept for
+        # reference, not relied on as a content hash.
+        return int(resp["ContentLength"]), str(resp.get("ETag", "")).strip('"')
 
     def delete(self, object_key: str) -> None:
         self._client.delete_object(Bucket=self._bucket, Key=object_key)

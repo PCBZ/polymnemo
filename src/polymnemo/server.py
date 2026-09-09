@@ -183,15 +183,29 @@ def create_upload(
     """Register a file / image / video memory and get a URL to upload its bytes.
 
     The bytes never go through this channel: `description` is embedded so the file
-    is findable via `recall`, and you PUT the raw bytes to the returned
-    `upload_url` **sending the returned `upload_headers`** (the Content-Type is
-    signed into the URL, so the PUT must send it or storage rejects it). Fetch
-    them later with `get_download_url`. Media defaults to a private namespace.
+    is findable via `recall`. **PUT** the raw bytes to `upload_url` sending
+    `upload_headers` (the signed Content-Type). **Then call `confirm_upload`** —
+    the memory stays hidden from `recall` (and the size cap is enforced) until you
+    do. Media defaults to a private namespace.
     Returns `{memory_id, object_key, upload_url, upload_headers, content_type, namespace}`.
     """
     return app.service.create_upload(
         current_user(), filename, content_type, description, namespace=namespace
     )
+
+
+@mcp.tool(annotations={"readOnlyHint": False, "destructiveHint": False})
+@tool_errors
+@rate_limited(cost=1)
+def confirm_upload(id: str) -> dict:
+    """Confirm a media upload after you've PUT the bytes.
+
+    Verifies the object exists, records its real size + checksum (and rejects an
+    over-limit upload), then makes the memory findable via `recall` /
+    downloadable. `id` is from `create_upload`. Returns
+    `{memory_id, confirmed, size_bytes, content_type}`.
+    """
+    return app.service.confirm_upload(current_user(), id)
 
 
 @mcp.tool(annotations={"readOnlyHint": True})
