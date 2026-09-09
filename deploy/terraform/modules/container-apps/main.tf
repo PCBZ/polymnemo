@@ -82,6 +82,18 @@ resource "azurerm_container_app" "this" {
     value = var.api_keys
   }
 
+  # R2 S3 credentials as secrets (only when media is enabled).
+  dynamic "secret" {
+    for_each = var.blob_backend == "none" ? {} : {
+      "blob-access-key-id"     = var.blob_access_key_id
+      "blob-secret-access-key" = var.blob_secret_access_key
+    }
+    content {
+      name  = secret.key
+      value = secret.value
+    }
+  }
+
   # Public HTTPS ingress; polymnemo enforces its own bearer auth.
   ingress {
     external_enabled = true
@@ -115,6 +127,30 @@ resource "azurerm_container_app" "this" {
       env {
         name        = "POLYMNEMO_API_KEYS"
         secret_name = "api-keys"
+      }
+
+      # Media/blob env only when R2 is wired in. Non-secret settings as plain
+      # env; the two credentials via the secrets declared above.
+      dynamic "env" {
+        for_each = var.blob_backend == "none" ? {} : {
+          POLYMNEMO_BLOB_BACKEND      = var.blob_backend
+          POLYMNEMO_BLOB_BUCKET       = var.blob_bucket
+          POLYMNEMO_BLOB_ENDPOINT_URL = var.blob_endpoint_url
+        }
+        content {
+          name  = env.key
+          value = env.value
+        }
+      }
+      dynamic "env" {
+        for_each = var.blob_backend == "none" ? {} : {
+          POLYMNEMO_BLOB_ACCESS_KEY_ID     = "blob-access-key-id"
+          POLYMNEMO_BLOB_SECRET_ACCESS_KEY = "blob-secret-access-key"
+        }
+        content {
+          name        = env.key
+          secret_name = env.value
+        }
       }
     }
   }

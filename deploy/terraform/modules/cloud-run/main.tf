@@ -84,6 +84,22 @@ resource "google_cloud_run_v2_service" "polymnemo" {
         name  = "POLYMNEMO_API_KEYS"
         value = var.api_keys
       }
+
+      # Media/blob env only when R2 is wired in (blob_backend = "s3"); absent
+      # otherwise, so the app keeps the media tools off.
+      dynamic "env" {
+        for_each = var.blob_backend == "none" ? {} : {
+          POLYMNEMO_BLOB_BACKEND           = var.blob_backend
+          POLYMNEMO_BLOB_BUCKET            = var.blob_bucket
+          POLYMNEMO_BLOB_ENDPOINT_URL      = var.blob_endpoint_url
+          POLYMNEMO_BLOB_ACCESS_KEY_ID     = var.blob_access_key_id
+          POLYMNEMO_BLOB_SECRET_ACCESS_KEY = var.blob_secret_access_key
+        }
+        content {
+          name  = env.key
+          value = env.value
+        }
+      }
     }
   }
 

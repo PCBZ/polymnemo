@@ -37,3 +37,15 @@ variable "api_keys" {
   sensitive   = true
   description = "Per-user keys \"key1:alice,key2:bob\", injected as POLYMNEMO_API_KEYS."
 }
+
+variable "cf_account_id" {
+  type        = string
+  default     = ""
+  description = "Cloudflare account id for the R2 media bucket. Empty (default) leaves media/blob storage OFF; set it to provision R2 and turn the media tools on."
+}
+
+variable "media_bucket_name" {
+  type        = string
+  default     = "polymnemo-media"
+  description = "R2 bucket name for media blobs (used only when cf_account_id is set)."
+}

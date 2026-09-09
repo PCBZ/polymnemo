@@ -17,3 +17,8 @@ output "runtime_service_account" {
   description = "Cloud Run runtime service account email."
   value       = module.cloud_run.runtime_service_account
 }
+
+output "media_bucket" {
+  description = "R2 media bucket name, or empty when media is disabled."
+  value       = try(module.r2[0].bucket, "")
+}

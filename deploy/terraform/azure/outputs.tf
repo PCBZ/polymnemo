@@ -12,3 +12,8 @@ output "mcp_endpoint" {
   description = "The MCP endpoint clients connect to."
   value       = module.container_apps.mcp_endpoint
 }
+
+output "media_bucket" {
+  description = "R2 media bucket name, or empty when media is disabled."
+  value       = try(module.r2[0].bucket, "")
+}

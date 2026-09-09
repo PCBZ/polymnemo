@@ -14,3 +14,11 @@ api_keys   = "sk-alice-secret:alice,sk-bob-secret:bob"
 # (for the registry-publish workflow), export a GitHub token before `apply`:
 #   export GITHUB_TOKEN=<token with repo + actions:write on PCBZ/polymnemo>
 # github_owner / github_repository default to PCBZ / polymnemo.
+
+# --- Media (Cloudflare R2), optional ----------------------------------------
+# Set cf_account_id to provision an R2 bucket + S3 creds and turn the media
+# tools ON — no hand-set POLYMNEMO_BLOB_* needed. Leave it unset for a DB-only
+# deploy (media off). When set, also export a Cloudflare token before `apply`:
+#   export CLOUDFLARE_API_TOKEN=<token: R2 edit + API Tokens edit>
+# cf_account_id     = "your-cloudflare-account-id"
+# media_bucket_name = "polymnemo-media"
