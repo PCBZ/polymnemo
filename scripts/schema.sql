@@ -28,6 +28,18 @@ CREATE TABLE IF NOT EXISTS memories (
     updated_at  TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+-- Additive migrations for a pre-existing `memories` table (the CREATE above is a
+-- no-op if it exists, so columns added by later issues need explicit ALTERs).
+-- All are IF NOT EXISTS, so re-running this file is always safe.
+ALTER TABLE memories ADD COLUMN IF NOT EXISTS session_id   TEXT;                          -- #15
+ALTER TABLE memories ADD COLUMN IF NOT EXISTS seq          INTEGER;                        -- #15
+ALTER TABLE memories ADD COLUMN IF NOT EXISTS kind         TEXT NOT NULL DEFAULT 'text';   -- #44
+ALTER TABLE memories ADD COLUMN IF NOT EXISTS object_key   TEXT;                           -- #44
+ALTER TABLE memories ADD COLUMN IF NOT EXISTS content_type TEXT;                           -- #44
+ALTER TABLE memories ADD COLUMN IF NOT EXISTS size_bytes   BIGINT;                         -- #44
+ALTER TABLE memories ADD COLUMN IF NOT EXISTS checksum     TEXT;                           -- #44
+ALTER TABLE memories ADD COLUMN IF NOT EXISTS confirmed    BOOLEAN NOT NULL DEFAULT TRUE;  -- #50
+
 -- Scoping: reads filter by namespace (+ user_id for private namespaces),
 -- writes filter by (id, user_id).
 CREATE INDEX IF NOT EXISTS memories_user_namespace_idx

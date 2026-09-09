@@ -180,14 +180,14 @@ def load_session(session_id: str, page: int = 0, page_size: int = 8000) -> dict:
 def create_upload(
     filename: str, content_type: str, description: str, namespace: str | None = None
 ) -> dict:
-    """Register a file / image / video memory and get a presigned POST to upload it.
+    """Register a file / image / video memory and get a URL to upload its bytes.
 
     The bytes never go through this channel: `description` is embedded so the file
-    is findable via `recall`. Upload by sending a multipart/form-data **POST** to
-    `upload_url` with `upload_fields` + the file (the store enforces a size cap).
-    **Then call `confirm_upload`** — the memory stays hidden from `recall` until you
+    is findable via `recall`. **PUT** the raw bytes to `upload_url` sending
+    `upload_headers` (the signed Content-Type). **Then call `confirm_upload`** —
+    the memory stays hidden from `recall` (and the size cap is enforced) until you
     do. Media defaults to a private namespace.
-    Returns `{memory_id, object_key, upload_url, upload_fields, content_type, namespace}`.
+    Returns `{memory_id, object_key, upload_url, upload_headers, content_type, namespace}`.
     """
     return app.service.create_upload(
         current_user(), filename, content_type, description, namespace=namespace

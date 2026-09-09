@@ -39,17 +39,16 @@ class S3BlobStore:
             region_name=region,
         )
 
-    def presign_post(self, object_key: str, content_type: str, max_bytes: int) -> dict:
-        # content-length-range makes the store reject oversized uploads at PUT
-        # time (a presigned PUT can't cap size).
-        return self._client.generate_presigned_post(
-            Bucket=self._bucket,
-            Key=object_key,
-            Fields={"Content-Type": content_type},
-            Conditions=[
-                {"Content-Type": content_type},
-                ["content-length-range", 1, max_bytes],
-            ],
+    def presign_put(self, object_key: str, content_type: str) -> str:
+        # PUT (not presigned POST): universally supported, incl. R2. Size is
+        # enforced at confirm via head(), not here.
+        return self._client.generate_presigned_url(
+            "put_object",
+            Params={
+                "Bucket": self._bucket,
+                "Key": object_key,
+                "ContentType": content_type,
+            },
             ExpiresIn=self._ttl,
         )
 
@@ -67,6 +66,8 @@ class S3BlobStore:
             resp = self._client.head_object(Bucket=self._bucket, Key=object_key)
         except ClientError as exc:
             raise BlobError(f"object {object_key} not found — upload it first.") from exc
+        # ETag is opaque (may be MD5, or <md5>-<parts> for multipart); kept for
+        # reference, not relied on as a content hash.
         return int(resp["ContentLength"]), str(resp.get("ETag", "")).strip('"')
 
     def delete(self, object_key: str) -> None:

@@ -16,7 +16,7 @@ def test_upload_is_hidden_until_confirmed(service):
     assert r["upload_url"].startswith("https://blob.local/")
     assert r["object_key"].endswith("/cat.png")
     assert r["namespace"] == "media"  # private by default
-    assert r["upload_fields"]["Content-Type"] == "image/png"  # presigned POST fields
+    assert r["upload_headers"] == {"Content-Type": "image/png"}
 
     # UNCONFIRMED: not recall-able, and no download URL yet (no ghost memory)
     assert service.recall("alice", "cat photo", namespace="media")["total"] == 0
@@ -37,6 +37,25 @@ def test_upload_is_hidden_until_confirmed(service):
 
     d = service.get_download_url("alice", r["memory_id"])
     assert d["url"].startswith("https://blob.local/")
+
+
+def test_confirm_before_upload_errors_cleanly(service):
+    service.ctx.blob_store.head_size = None  # simulate "bytes never uploaded"
+    r = service.create_upload("alice", "cat.png", "image/png", "a cat")
+    with pytest.raises(ValueError, match="upload it first"):
+        service.confirm_upload("alice", r["memory_id"])
+
+
+def test_oversized_upload_is_rejected_and_cleaned_up(service):
+    from polymnemo.config import settings
+
+    service.ctx.blob_store.head_size = settings.blob_max_bytes + 1  # too big
+    r = service.create_upload("alice", "huge.bin", "application/octet-stream", "big")
+    with pytest.raises(ValueError, match="over the"):
+        service.confirm_upload("alice", r["memory_id"])
+    # the object was deleted and the hidden row removed
+    assert r["object_key"] in service.ctx.blob_store.deleted
+    assert service.ctx.store.get("alice", r["memory_id"]) is None
 
 
 def test_media_is_private_to_owner(service):
@@ -111,7 +130,7 @@ async def test_media_tools_over_client(monkeypatch, fake_blob_store):
                 )
             ).data
             assert r["upload_url"].startswith("https://blob.local/")
-            assert "upload_fields" in r
+            assert "upload_headers" in r
 
             await client.call_tool("confirm_upload", {"id": r["memory_id"]})
 

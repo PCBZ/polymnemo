@@ -21,12 +21,11 @@ class BlobError(Exception):
 
 @runtime_checkable
 class BlobStore(Protocol):
-    def presign_post(
-        self, object_key: str, content_type: str, max_bytes: int
-    ) -> dict:
-        """A short-lived presigned **POST** for direct upload, returning
-        ``{"url", "fields"}``. A ``content-length-range`` condition caps the size
-        so the store itself rejects an oversized upload (#50)."""
+    def presign_put(self, object_key: str, content_type: str) -> str:
+        """A short-lived URL the client PUTs bytes to (direct upload). PUT is used
+        (not presigned POST) because it's universally supported by S3-compatible
+        stores incl. Cloudflare R2; the size cap is enforced at ``confirm`` via
+        ``head`` instead (#50)."""
         ...
 
     def presign_get(self, object_key: str) -> str:
@@ -34,8 +33,10 @@ class BlobStore(Protocol):
         ...
 
     def head(self, object_key: str) -> tuple[int, str]:
-        """Return ``(size_bytes, checksum)`` for an uploaded object; raise
-        :class:`BlobError` if it doesn't exist (used to confirm an upload)."""
+        """Return ``(size_bytes, etag)`` for an uploaded object; raise
+        :class:`BlobError` if it doesn't exist. ``etag`` is opaque (not a
+        guaranteed content hash — multipart/store-specific), stored as ``checksum``
+        for reference only."""
         ...
 
     def delete(self, object_key: str) -> None:
