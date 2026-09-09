@@ -4,6 +4,11 @@
 # CI deploy, and publish its coordinates as GitHub Actions variables so the
 # deploy workflow can `terraform init` against it.
 #
+# Deliberately a plain script, not a Terraform root: this creates the very store
+# that every root uses for its state, so it can't keep its own state there
+# (chicken-and-egg). An imperative script has no state to keep — the standard
+# approach (HashiCorp's own azurerm backend tutorial bootstraps with the CLI too).
+#
 #   az login                              # a principal that can create resources
 #   bash scripts/bootstrap-tfstate-azure.sh
 #
@@ -48,6 +53,10 @@ gh variable set TFSTATE_CONTAINER       --body "$CONTAINER"
 
 echo
 echo "Done. GitHub variables set: TFSTATE_RESOURCE_GROUP / _STORAGE_ACCOUNT / _CONTAINER."
+echo
+echo "IMPORTANT: do NOT delete $RESOURCE_GROUP / $STORAGE_ACCOUNT by hand. It holds"
+echo "every root's Terraform state and is intentionally NOT managed by Terraform (so"
+echo "it can't be recreated by an apply). Deleting it orphans all deployed infra."
 echo
 echo "The CI service principal (ARM_CLIENT_ID) must be able to reach this account —"
 echo "'Contributor' on the subscription (from az ad sp create-for-rbac) covers it,"
