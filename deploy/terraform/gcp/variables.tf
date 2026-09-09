@@ -39,8 +39,3 @@ variable "github_repository" {
   description = "GitHub repository name under github_owner."
 }
 
-variable "media_enabled" {
-  type        = bool
-  default     = true
-  description = "Media tools ON by default: the compute root reads the shared r2/ root's state (bucket + S3 creds), so you must apply the r2/ root first. Set false for a database-only deploy (no Cloudflare dependency)."
-}

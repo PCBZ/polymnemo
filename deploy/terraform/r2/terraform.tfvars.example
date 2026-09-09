@@ -1,6 +1,6 @@
 # Copy to terraform.tfvars and fill in. terraform.tfvars and the state file hold
-# secrets — both are gitignored. Apply this root only if you want media on, then
-# set media_enabled=true in the gcp/ and/or azure/ root.
+# secrets — both are gitignored. Media is always on, so this is a required root:
+# apply it before the gcp/ and/or azure/ compute root.
 #
 # Auth is via an env var, NOT a variable:
 #   export CLOUDFLARE_API_TOKEN=<token with R2 edit + API Tokens edit>
@@ -10,3 +10,9 @@ cf_account_id = "your-cloudflare-account-id"
 # Optional overrides:
 # bucket_name = "polymnemo-media"
 # location    = "WNAM"   # WNAM | ENAM | WEUR | EEUR | APAC
+
+# Escape hatch — only if the auto-derived S3 creds 403 (see #6626). Create an R2
+# API token in the dashboard (R2 -> Manage R2 API Tokens) and paste both here to
+# skip the derivation:
+# access_key_id     = "..."
+# secret_access_key = "..."

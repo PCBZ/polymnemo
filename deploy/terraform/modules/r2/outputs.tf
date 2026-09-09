@@ -9,12 +9,14 @@ output "endpoint_url" {
 }
 
 output "access_key_id" {
-  description = "R2 S3 access key id (the API token id)."
-  value       = cloudflare_api_token.r2.id
+  description = "R2 S3 access key id — the token id, or the supplied override."
+  value       = coalesce(var.access_key_id, try(one(cloudflare_api_token.r2[*].id), ""))
 }
 
 output "secret_access_key" {
-  description = "R2 S3 secret access key (sha256 of the API token value)."
-  value       = sha256(cloudflare_api_token.r2.value)
-  sensitive   = true
+  description = "R2 S3 secret access key — sha256 of the token value, or the supplied override."
+  # try() swallows the null (override path, count 0); coalesce prefers the
+  # override when set, else the derived digest.
+  value     = coalesce(var.secret_access_key, try(sha256(one(cloudflare_api_token.r2[*].value)), ""))
+  sensitive = true
 }

@@ -17,7 +17,7 @@ set only a handful of variables.
 | Variable | Root | Notes |
 | --- | --- | --- |
 | `neon_api_key` 🔒 | neon | Neon console → API keys |
-| `cf_account_id` | r2 | Cloudflare account id (media is on by default) |
+| `cf_account_id` | r2 | Cloudflare account id (media is always on) |
 | `project_id` | gcp | GCP project id |
 | `api_keys` 🔒 | gcp | `key1:alice,key2:bob` → `POLYMNEMO_API_KEYS` |
 | `image` | gcp | Set on the **second** apply; empty on the bootstrap apply |
@@ -25,10 +25,6 @@ set only a handful of variables.
 Plus `export CLOUDFLARE_API_TOKEN=…` before applying the `r2` root (a token with
 R2 edit + API Tokens edit). **Azure path — 6 values:** swap `project_id` for
 `azure_subscription_id` + `acr_name` (globally unique); the rest match.
-
-Don't want media? Set `media_enabled = false` on the compute root and skip the
-`r2` root + Cloudflare entirely — that drops you back to 4 values (GCP) / 5
-(Azure).
 
 Everything else has a default: `region`/`location`, `service_name`, instance
 sizing, `github_owner`/`github_repository`.
@@ -43,18 +39,18 @@ sizing, `github_owner`/`github_repository`.
   `/mcp` URL into the repo's GitHub Actions variable after apply. Export
   `GITHUB_TOKEN` before `apply` to enable it; skip it otherwise.
 
-## Media / large files (Cloudflare R2) — on by default, fully automated
+## Media / large files (Cloudflare R2) — always on, fully automated
 
-Media tools (upload / download of files, images, video) are **on by default**.
-They mirror the Neon setup: a dedicated **`deploy/terraform/r2` root** owns the
-**one** bucket + S3 credentials, and each compute root *reads* it
-(`terraform_remote_state`) — so GCP and Azure share the **same** R2, exactly like
-they share the same Neon. (If they didn't, a file uploaded via one cloud would
-404 when downloaded via the other, since the media row lives in the shared Neon
-and points at one `object_key`.)
+Media tools (upload / download of files, images, video) are **always on** — a
+core capability, not a toggle. They mirror the Neon setup: a dedicated
+**`deploy/terraform/r2` root** owns the **one** bucket + S3 credentials, and each
+compute root *reads* it (`terraform_remote_state`) — so GCP and Azure share the
+**same** R2, exactly like they share the same Neon. (If they didn't, a file
+uploaded via one cloud would 404 when downloaded via the other, since the media
+row lives in the shared Neon and points at one `object_key`.)
 
-Because it's on by default, the `r2` root is a standard deploy step (like
-`neon`), applied before the compute root:
+The `r2` root is a standard deploy step (like `neon`), applied before the compute
+root:
 
 ```bash
 cd deploy/terraform/r2
@@ -68,9 +64,6 @@ and derives the S3 credentials; the compute root then reads them and injects
 `POLYMNEMO_BLOB_BACKEND=s3` plus the bucket / endpoint / key / secret into the
 service.
 
-**Database-only deploy:** set `media_enabled = false` on the compute root and
-skip the `r2` root entirely — no Cloudflare dependency, media tools off.
-
 ### If R2 uploads 403 (escape hatch)
 
 The S3 credentials are **derived** from the API token
@@ -83,12 +76,11 @@ Some provider builds have 403'd on the derived pair
 ([#6626](https://github.com/cloudflare/terraform-provider-cloudflare/issues/6626)).
 
 If `apply` or the first upload 403s: create an **R2 API token** in the
-Cloudflare dashboard (R2 → *Manage R2 API Tokens*), which hands you an Access
-Key ID + Secret Access Key directly. Then leave `media_enabled = false` (so the
-compute root doesn't read the derived creds) and set the four `POLYMNEMO_BLOB_*`
-env vars by hand on the service — `_BACKEND=s3`, `_BUCKET`, `_ENDPOINT_URL`,
-`_ACCESS_KEY_ID`, `_SECRET_ACCESS_KEY`. The bucket can still be Terraform-managed
-by the `r2/` root.
+Cloudflare dashboard (R2 → *Manage R2 API Tokens*), which hands you an Access Key
+ID + Secret Access Key directly, then set both on the **`r2` root** —
+`access_key_id` and `secret_access_key` in its `terraform.tfvars`. Terraform then
+skips the derivation and uses your pre-made pair; the bucket and everything
+downstream stay Terraform-managed and media stays on.
 
 ### Not yet automated
 

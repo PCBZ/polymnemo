@@ -22,9 +22,8 @@ data "terraform_remote_state" "neon" {
 
 # The SHARED media bucket + S3 creds, from the r2/ root's state — the same
 # read-only pattern as the neon data source above, so GCP and Azure use the
-# *same* R2. Only read when media_enabled; a DB-only deploy has no r2/ state.
+# *same* R2. Media is always on: apply the r2/ root before this one.
 data "terraform_remote_state" "r2" {
-  count   = var.media_enabled ? 1 : 0
   backend = "local"
   config = {
     path = "../r2/terraform.tfstate"
@@ -40,12 +39,12 @@ module "cloud_run" {
   database_url = data.terraform_remote_state.neon.outputs.connection_uri_pooler
   api_keys     = var.api_keys
 
-  # Media/blob wiring — inert (backend "none") unless media_enabled.
-  blob_backend           = var.media_enabled ? "s3" : "none"
-  blob_bucket            = try(data.terraform_remote_state.r2[0].outputs.bucket, "")
-  blob_endpoint_url      = try(data.terraform_remote_state.r2[0].outputs.endpoint_url, "")
-  blob_access_key_id     = try(data.terraform_remote_state.r2[0].outputs.access_key_id, "")
-  blob_secret_access_key = try(data.terraform_remote_state.r2[0].outputs.secret_access_key, "")
+  # Media/blob wiring — always on, from the shared r2/ root.
+  blob_backend           = "s3"
+  blob_bucket            = data.terraform_remote_state.r2.outputs.bucket
+  blob_endpoint_url      = data.terraform_remote_state.r2.outputs.endpoint_url
+  blob_access_key_id     = data.terraform_remote_state.r2.outputs.access_key_id
+  blob_secret_access_key = data.terraform_remote_state.r2.outputs.secret_access_key
 }
 
 # Auto-fill the deployed /mcp endpoint into a GitHub Actions variable, so the
