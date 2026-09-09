@@ -30,12 +30,47 @@ API key), and the server makes no generative-LLM calls.
 > Apps (or Cloud Run) via Terraform.
 > [Wiki](https://github.com/PCBZ/polymnemo/wiki) · [Issues](https://github.com/PCBZ/polymnemo/issues)
 
+## Features
+
+- 🔗 **Cross-LLM shared** — point any MCP client at one endpoint; they share the same memory.
+- 🧠 **Semantic recall** — vector search over Postgres + pgvector, not keyword matching.
+- 💬 **Sessions** — save a full transcript and reload it verbatim, or recall across it.
+- 🖼️ **Multimedia** — attach files, images, or video; bytes go to object storage, only a searchable description is embedded.
+- 🔒 **Local & private** — embeddings run locally (ONNX): no embedding API key, and no generative-LLM calls, ever.
+- 👥 **Namespaces** — "born-shared" collections readable by everyone, vs. private-to-owner; writes are always owner-scoped.
+- 🧩 **Pluggable layers** — store, embedder, auth, retriever, blob store, and rate limiter are all swappable `Protocol`s.
+- ☁️ **Multi-cloud deploy** — one Terraform stack to Azure Container Apps or Cloud Run, scale-to-zero.
+- 🚦 **Rate limiting** — optional global token bucket.
+
+## How it works
+
 ```mermaid
 flowchart LR
     Clients["MCP clients<br/>(Claude Desktop, IDEs, …)"] -->|"/mcp · Bearer key"| P["polymnemo<br/>(MCP server)"]
     P --> DB[("Postgres + pgvector<br/>text + pointers")]
     P -. "large files<br/>(presigned URLs)" .-> OS[("Object storage<br/>S3 / R2")]
 ```
+
+A request carries a bearer key (which resolves to a `user_id`); the tool passes
+the rate-limit gate, then delegates to a `MemoryService` that chunks + embeds
+text and stores the vectors in pgvector — large files go to object storage via
+presigned URLs, with only a searchable description embedded.
+
+Every layer is a `typing.Protocol`, wired together by a composition root
+([`context.py`](src/polymnemo/context.py)), so you can swap an implementation
+without touching the tools:
+
+| Layer | Default | Swap for |
+|-------|---------|----------|
+| **Store** | `PostgresStore` (pgvector) | `InMemoryStore` (dev/tests) |
+| **Embedder** | `fastembed` (local ONNX) | `StubEmbedder` (offline) |
+| **Auth** | per-user bearer keys | static single-user (dev) |
+| **Retriever** | `VectorRetriever` | your own ranker |
+| **BlobStore** | S3 / R2 | off |
+| **RateLimiter** | global token bucket | off |
+
+The `ping` tool returns the active layers, so you can see how a running server is
+wired.
 
 ## Quickstart
 
@@ -113,11 +148,20 @@ npx @modelcontextprotocol/inspector
 # Header:    Authorization: Bearer sk-alice-secret  → call ping / remember / recall
 ```
 
+## Concepts
+
+- **Users & keys** — each bearer key maps to a `user_id`; writes are owner-scoped
+  (you can only edit or delete your own memories).
+- **Namespaces** — memories live in namespaces. A *shared* namespace (default
+  `shared`) is readable by everyone ("born shared"); everything else is private
+  to its owner. Sessions and media default to private namespaces.
+- **Chunking** — long content is split into chunks on write (one vector each), so
+  `remember` may return several ids and `recall` returns the closest chunks.
+
 ## Tools
 
-Every call is authenticated by the bearer key (which resolves to a `user_id`).
-Writes are owner-scoped; reads see your own memories plus anything in a *shared*
-namespace (defaults to `shared`).
+The MCP tools polymnemo exposes. See [Concepts](#concepts) for how keys,
+namespaces, and chunking work.
 
 | Tool | Arguments | Returns |
 |------|-----------|---------|
@@ -134,10 +178,9 @@ namespace (defaults to `shared`).
 | `confirm_upload` | `id` | `{memory_id, confirmed, size_bytes, content_type}` |
 | `get_download_url` | `id` | `{memory_id, url, content_type}` |
 
-Large `content` is split into chunks on write (one vector each), so `remember`
-may return several ids. `recall` returns the nearest chunks by similarity, paged
-with `next_cursor`. Sessions store a full transcript that `load_session`
-reconstructs verbatim; they default to a private namespace (`sessions`).
+`recall` returns the nearest chunks by similarity, paged with `next_cursor` /
+`has_more`. Sessions store a full transcript that `load_session` reconstructs
+verbatim.
 
 **Media memories** (files, images, video) keep the bytes in object storage, not
 the database: `create_upload` returns a presigned URL you PUT the bytes to,
