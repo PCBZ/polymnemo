@@ -1,18 +1,27 @@
 # polymnemo
 
+[![CI](https://github.com/PCBZ/polymnemo/actions/workflows/ci.yml/badge.svg)](https://github.com/PCBZ/polymnemo/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-blue.svg)
+
 **A shared long-term memory across any LLM, over [MCP](https://modelcontextprotocol.io).**
 
 Point Claude Desktop, an MCP-capable IDE, or any MCP client at one polymnemo
 endpoint and they share the same memories — stored in your own Postgres. Store a
-fact with one assistant, recall it from another. Embeddings run locally (no
-embedding API key), and the server makes no generative-LLM calls.
+fact with one assistant, recall it from another; save whole sessions and reload
+them; even attach files, images, or video. Embeddings run locally (no embedding
+API key), and the server makes no generative-LLM calls.
 
-> **Status:** early development; the MVP (semantic memory + pgvector store) works.
+> **Status:** active development. Semantic memory + pgvector store, session
+> save/reload, and multimedia memories all work; deployable to Azure Container
+> Apps (or Cloud Run) via Terraform.
 > [Wiki](https://github.com/PCBZ/polymnemo/wiki) · [Issues](https://github.com/PCBZ/polymnemo/issues)
 
 ```mermaid
 flowchart LR
-    Clients["MCP clients<br/>(Claude Desktop, IDEs, …)"] -->|"/mcp · Bearer key"| P["polymnemo<br/>(MCP server)"] --> DB[("Postgres + pgvector")]
+    Clients["MCP clients<br/>(Claude Desktop, IDEs, …)"] -->|"/mcp · Bearer key"| P["polymnemo<br/>(MCP server)"]
+    P --> DB[("Postgres + pgvector<br/>text + pointers")]
+    P -. "large files<br/>(presigned URLs)" .-> OS[("Object storage<br/>S3 / R2")]
 ```
 
 ## Quickstart
@@ -24,7 +33,7 @@ Requires **Python 3.11+**.
 ```bash
 python -m venv .venv
 source .venv/bin/activate            # Windows: .venv\Scripts\activate
-pip install -e ".[postgres]"
+pip install -e ".[postgres]"         # add ,blob for media memories: ".[postgres,blob]"
 ```
 
 ### 2. Provision Postgres (pgvector)
@@ -108,11 +117,22 @@ namespace (defaults to `shared`).
 | `forget` | `id` | `{id, deleted}` |
 | `save_session` | `session_id`, `content`, `namespace?` | `{session_id, chunks, chars, namespace}` |
 | `load_session` | `session_id`, `page=0`, `page_size=8000` | `{session_id, content, page, page_size, total_chars, has_more}` |
+| `create_upload` | `filename`, `content_type`, `description`, `namespace?` | `{memory_id, object_key, upload_url, upload_headers, …}` |
+| `confirm_upload` | `id` | `{memory_id, confirmed, size_bytes, content_type}` |
+| `get_download_url` | `id` | `{memory_id, url, content_type}` |
 
 Large `content` is split into chunks on write (one vector each), so `remember`
 may return several ids. `recall` returns the nearest chunks by similarity, paged
 with `next_cursor`. Sessions store a full transcript that `load_session`
 reconstructs verbatim; they default to a private namespace (`sessions`).
+
+**Media memories** (files, images, video) keep the bytes in object storage, not
+the database: `create_upload` returns a presigned URL you PUT the bytes to,
+`confirm_upload` records the real size/checksum and reveals it, and
+`get_download_url` mints a short-lived download link. The bytes never cross the
+MCP channel — only a searchable `description` is embedded — and media defaults to
+a private namespace (`media`). Requires the `blob` extra + object storage (see
+Configuration).
 
 **Resource** — `memory://{namespace}` exposes a namespace's memories (same shape
 as `list_memories`) so a client can auto-inject the collection.
@@ -128,25 +148,35 @@ as `list_memories`) so a client can auto-inject the collection.
 | `POLYMNEMO_API_KEYS` | *(empty)* | `"key1:alice,key2:bob"` — required for bearer auth. |
 | `POLYMNEMO_SHARED_NAMESPACES` | `shared` | Namespaces readable by every user. |
 | `POLYMNEMO_HOST` / `POLYMNEMO_PORT` / `POLYMNEMO_MCP_PATH` | `127.0.0.1` / `8000` / `/mcp` | Transport. |
+| `POLYMNEMO_RATELIMIT_ENABLED` / `_PER_MIN` | `false` / `600` | Optional global rate limit (ops per minute). |
+| `POLYMNEMO_BLOB_BACKEND` (+ `_BUCKET` / `_ENDPOINT_URL` / `_ACCESS_KEY_ID` / `_SECRET_ACCESS_KEY`) | `none` | Object storage for media memories; `s3` = Cloudflare R2 / S3-compatible. |
 
 ## Development
 
 ```bash
 pip install -e ".[dev]"
 pytest                               # fast, offline (stub embedder, in-memory store)
+ruff check . && ruff format --check .   # lint + format (enforced in CI)
 ```
 
-Postgres tests run when `TEST_DATABASE_URL` points at a pgvector Postgres.
+Postgres tests run when `TEST_DATABASE_URL` points at a pgvector Postgres. CI
+(`.github/workflows/ci.yml`) runs lint + the suite with coverage and posts a
+pass/fail/coverage table to each run's summary.
 
 ## Deploy
 
-polymnemo is stateless (all state in Neon), so it runs on **Google Cloud Run**
-and/or **Azure Container Apps** with scale-to-zero. Infrastructure is Terraform in
-[`deploy/terraform/`](deploy/terraform): a shared [`neon/`](deploy/terraform/neon)
-root owns the one database, and the [`gcp/`](deploy/terraform/gcp) and
-[`azure/`](deploy/terraform/azure) roots each deploy a service against it — so a
-memory written from one cloud is recallable from the other. Usage is in each
-root's `main.tf`.
+polymnemo is stateless (all state in Neon + object storage), so it runs on
+**Azure Container Apps** (primary) or **Google Cloud Run** with scale-to-zero.
+Everything is Terraform in [`deploy/terraform/`](deploy/terraform): shared
+[`neon/`](deploy/terraform/neon) (Postgres) and [`r2/`](deploy/terraform/r2)
+(media bucket) roots own the durable state, and a compute root deploys a service
+that reads both — so memories *and* media are shared across clouds.
+
+The Azure path deploys from CI in one click: set the GitHub secrets
+(`scripts/setup-github-secrets.sh`), bootstrap the state backend
+(`scripts/bootstrap-tfstate-azure.sh`), then run the **deploy (azure)** workflow
+(`neon → schema → r2 → build → app`). GCP is a manual failover. Full walkthrough
+in [`docs/deploy.md`](docs/deploy.md).
 
 ## License
 
