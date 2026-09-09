@@ -32,9 +32,15 @@ setup:
    `TFSTATE_RESOURCE_GROUP` / `TFSTATE_STORAGE_ACCOUNT` / `TFSTATE_CONTAINER` as
    GitHub variables.
 4. **Run it** — Actions tab → *deploy (azure)* → Run workflow. It applies
-   `neon` → schema → `r2` → builds the image → applies `azure`, and prints the
-   MCP endpoint. Re-runnable (shared remote state); `concurrency` blocks
-   overlapping runs.
+   `neon` → schema → `r2` → `azure`. The `azure` apply builds the image **inside
+   ACR** (Terraform's `azurerm_container_registry_task`, no `az acr build` / azure
+   login) and deploys it in one step, then prints the MCP endpoint. Re-runnable
+   (shared remote state); `concurrency` blocks overlapping runs; the run forces a
+   fresh image build each time with `-replace`.
+
+The image build clones the public repo, so the build's `context_access_token` is
+the workflow's short-lived `GITHUB_TOKEN` — no extra secret. (A private repo
+would need a real PAT here instead.)
 
 The rest of this doc describes the same variables for a **local** apply.
 

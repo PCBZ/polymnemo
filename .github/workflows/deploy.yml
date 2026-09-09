@@ -51,11 +51,6 @@ jobs:
         with:
           terraform_version: "1.13.2"
 
-      - name: Azure login (for az acr build)
-        uses: azure/login@v2
-        with:
-          creds: '{"clientId":"${{ secrets.ARM_CLIENT_ID }}","clientSecret":"${{ secrets.ARM_CLIENT_SECRET }}","subscriptionId":"${{ secrets.ARM_SUBSCRIPTION_ID }}","tenantId":"${{ secrets.ARM_TENANT_ID }}"}'
-
       # 1) Shared Postgres.
       - name: Terraform apply — neon
         working-directory: deploy/terraform/neon
@@ -77,24 +72,16 @@ jobs:
           terraform init $TF_BACKEND -backend-config=key=r2.tfstate
           terraform apply -auto-approve
 
-      # 3) Bootstrap the Azure app (RG + ACR + env; image still empty).
-      - name: Terraform apply — azure (bootstrap)
+      # 3) Build the image IN ACR (Terraform, no az/docker) + deploy the app —
+      #    one apply. `-replace` forces a fresh build each run (schedule_run_now
+      #    otherwise runs only on create; harmless warning on the very first run).
+      - name: Terraform apply — azure (build + deploy)
         working-directory: deploy/terraform/azure
+        env:
+          TF_VAR_image_tag: ${{ inputs.image_tag }}
+          TF_VAR_context_access_token: ${{ secrets.GITHUB_TOKEN }}
         run: |
           terraform init $TF_BACKEND -backend-config=key=azure.tfstate
-          terraform apply -auto-approve
-
-      # 4) Build + push the image into the just-created ACR.
-      - name: Build image
-        working-directory: deploy/terraform/azure
-        run: |
-          az acr build --registry "${{ vars.ACR_NAME }}" \
-            --image "polymnemo:${{ inputs.image_tag }}" ../../..
-
-      # 5) Deploy the app with the built image.
-      - name: Terraform apply — azure (deploy)
-        working-directory: deploy/terraform/azure
-        run: |
           terraform apply -auto-approve \
-            -var "image=${{ vars.ACR_NAME }}.azurecr.io/polymnemo:${{ inputs.image_tag }}"
+            -replace=module.container_apps.azurerm_container_registry_task_schedule_run_now.build
           echo "MCP endpoint: $(terraform output -raw mcp_endpoint)"

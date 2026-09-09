@@ -18,9 +18,22 @@ variable "acr_name" {
   description = "Azure Container Registry name — globally unique, 5-50 alphanumeric."
 }
 
-variable "image" {
+variable "image_tag" {
   type        = string
-  description = "Full ACR image ref incl. tag (e.g. myacr.azurecr.io/polymnemo:v1). Empty on the bootstrap apply — the Container App is then skipped."
+  default     = "v1"
+  description = "Tag for the image built in ACR (polymnemo:<tag>) and run by the app."
+}
+
+variable "git_context" {
+  type        = string
+  default     = "https://github.com/PCBZ/polymnemo.git#main"
+  description = "Build context for the ACR task — the (public) repo + ref holding the Dockerfile."
+}
+
+variable "context_access_token" {
+  type        = string
+  sensitive   = true
+  description = "Token for the ACR task's Git context. Required by the provider even for a public repo; the workflow passes the short-lived GITHUB_TOKEN (enough to clone)."
 }
 
 variable "database_url" {

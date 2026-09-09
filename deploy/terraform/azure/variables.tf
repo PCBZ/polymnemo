@@ -26,10 +26,16 @@ variable "acr_name" {
   description = "Azure Container Registry name — globally unique, 5-50 alphanumeric (e.g. polymnemoacr123)."
 }
 
-variable "image" {
+variable "image_tag" {
   type        = string
-  default     = ""
-  description = "ACR image ref incl. tag. Empty on the bootstrap apply (app skipped)."
+  default     = "v1"
+  description = "Tag for the image Terraform builds in ACR and runs (polymnemo:<tag>)."
+}
+
+variable "context_access_token" {
+  type        = string
+  sensitive   = true
+  description = "Token for the ACR build task's Git context. Required even for a public repo; the workflow passes the short-lived GITHUB_TOKEN."
 }
 
 variable "api_keys" {
