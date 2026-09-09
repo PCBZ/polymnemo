@@ -1,10 +1,10 @@
 name: Coverage dashboard (Pages)
 
-# Publishes a test + coverage dashboard to GitHub Pages on every push to main.
-# Self-contained: runs the suite with coverage (against a pgvector service),
-# builds site/index.html (scripts/build_dashboard.py), and ships the full htmlcov
-# report alongside. configure-pages enables Pages on first run if the token can;
-# otherwise enable it once (Settings -> Pages -> Source: GitHub Actions).
+# Publishes two off-the-shelf HTML reports to GitHub Pages on every push to main:
+# the coverage.py `htmlcov` report and the pytest-html test report (no custom
+# dashboard code). Self-contained: runs the suite against a pgvector service.
+# configure-pages enables Pages on first run if the token can; otherwise enable
+# it once (Settings -> Pages -> Source: GitHub Actions).
 on:
   push:
     branches: [main]
@@ -44,15 +44,34 @@ jobs:
         with:
           python-version: "3.11"
       - name: Install
-        run: pip install -e ".[dev]" pytest-cov
+        run: pip install -e ".[dev]" pytest-cov pytest-html
       - name: Apply schema
         run: psql "$TEST_DATABASE_URL" -f scripts/schema.sql
-      - name: Test + coverage
-        run: pytest --cov=polymnemo --cov-report=html --cov-report=json --junitxml=pytest.xml
-      - name: Build dashboard
+      - name: Test — coverage (htmlcov) + report (pytest-html)
         run: |
-          python scripts/build_dashboard.py
+          mkdir -p site
+          pytest --cov=polymnemo --cov-report=html \
+                 --html=site/tests.html --self-contained-html
+      - name: Assemble site
+        run: |
           cp -r htmlcov site/htmlcov
+          cat > site/index.html <<'HTML'
+          <!doctype html>
+          <html lang="en"><head><meta charset="utf-8">
+          <meta name="viewport" content="width=device-width, initial-scale=1">
+          <title>polymnemo — CI reports</title>
+          <style>
+            body{font:16px/1.7 system-ui,-apple-system,sans-serif;max-width:40rem;
+                 margin:3rem auto;padding:0 1rem;color-scheme:light dark}
+            a{color:#1565c0} li{margin:.4rem 0}
+          </style></head><body>
+          <h1>polymnemo — CI reports</h1>
+          <ul>
+            <li><a href="tests.html">Test report</a> — pytest-html</li>
+            <li><a href="htmlcov/index.html">Coverage report</a> — coverage.py</li>
+          </ul>
+          </body></html>
+          HTML
       - uses: actions/configure-pages@v5
         with:
           enablement: true
