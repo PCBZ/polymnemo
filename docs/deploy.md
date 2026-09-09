@@ -38,23 +38,33 @@ sizing, `github_owner`/`github_repository`.
 
 ## Media / large files (Cloudflare R2) — optional, fully automated
 
-Media tools are **off** unless you provision R2. To turn them on with zero
-hand-set `POLYMNEMO_BLOB_*` vars, set **one** variable and export a Cloudflare
-token:
+Media tools are **off** by default. Enabling them mirrors the Neon setup: a
+dedicated **`deploy/terraform/r2` root** owns the **one** bucket + S3
+credentials, and each compute root *reads* it (`terraform_remote_state`) — so
+GCP and Azure share the **same** R2, exactly like they share the same Neon. (If
+they didn't, a file uploaded via one cloud would 404 when downloaded via the
+other, since the media row lives in the shared Neon and points at one
+`object_key`.)
 
-```hcl
-# terraform.tfvars (gcp or azure)
-cf_account_id = "your-cloudflare-account-id"
-```
+Two steps:
+
 ```bash
+# 1) apply the shared r2/ root once (owns the bucket + creds)
+cd deploy/terraform/r2
+cp terraform.tfvars.example terraform.tfvars      # set cf_account_id
 export CLOUDFLARE_API_TOKEN=<token: R2 edit + API Tokens edit>
-terraform apply
+terraform init && terraform apply
+```
+```hcl
+# 2) in the compute root's terraform.tfvars (gcp and/or azure)
+media_enabled = true
 ```
 
-Terraform then (`modules/r2`) creates the bucket, mints an R2-scoped API token,
-derives the S3 credentials, and injects `POLYMNEMO_BLOB_BACKEND=s3` plus the
-bucket / endpoint / key / secret into the service. Leave `cf_account_id` unset
-for a database-only deploy.
+The `r2` root (`modules/r2`) creates the bucket, mints an R2-scoped API token,
+and derives the S3 credentials; the compute root reads them and injects
+`POLYMNEMO_BLOB_BACKEND=s3` plus the bucket / endpoint / key / secret into the
+service. Skip step 1 and leave `media_enabled = false` for a database-only
+deploy (no Cloudflare dependency at all).
 
 ### If R2 uploads 403 (escape hatch)
 
@@ -69,10 +79,11 @@ Some provider builds have 403'd on the derived pair
 
 If `apply` or the first upload 403s: create an **R2 API token** in the
 Cloudflare dashboard (R2 → *Manage R2 API Tokens*), which hands you an Access
-Key ID + Secret Access Key directly, then set them by hand on the service —
-`POLYMNEMO_BLOB_ACCESS_KEY_ID` and `POLYMNEMO_BLOB_SECRET_ACCESS_KEY` — and drop
-`cf_account_id` so Terraform doesn't try to derive them. The bucket can still be
-Terraform-managed.
+Key ID + Secret Access Key directly. Then leave `media_enabled = false` (so the
+compute root doesn't read the derived creds) and set the four `POLYMNEMO_BLOB_*`
+env vars by hand on the service — `_BACKEND=s3`, `_BUCKET`, `_ENDPOINT_URL`,
+`_ACCESS_KEY_ID`, `_SECRET_ACCESS_KEY`. The bucket can still be Terraform-managed
+by the `r2/` root.
 
 ### Not yet automated
 

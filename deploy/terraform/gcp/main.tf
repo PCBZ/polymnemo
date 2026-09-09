@@ -20,18 +20,15 @@ data "terraform_remote_state" "neon" {
   }
 }
 
-locals {
-  # Media is on iff a Cloudflare account is given. Keeps R2 fully optional: no
-  # cf_account_id => no module.r2 => no Cloudflare auth needed.
-  media_enabled = var.cf_account_id != ""
-}
-
-# R2 bucket + S3 credentials for media blobs (only when cf_account_id is set).
-module "r2" {
-  count         = local.media_enabled ? 1 : 0
-  source        = "../modules/r2"
-  cf_account_id = var.cf_account_id
-  bucket_name   = var.media_bucket_name
+# The SHARED media bucket + S3 creds, from the r2/ root's state — the same
+# read-only pattern as the neon data source above, so GCP and Azure use the
+# *same* R2. Only read when media_enabled; a DB-only deploy has no r2/ state.
+data "terraform_remote_state" "r2" {
+  count   = var.media_enabled ? 1 : 0
+  backend = "local"
+  config = {
+    path = "../r2/terraform.tfstate"
+  }
 }
 
 module "cloud_run" {
@@ -43,12 +40,12 @@ module "cloud_run" {
   database_url = data.terraform_remote_state.neon.outputs.connection_uri_pooler
   api_keys     = var.api_keys
 
-  # Media/blob wiring — inert (backend "none") unless R2 is provisioned.
-  blob_backend           = local.media_enabled ? "s3" : "none"
-  blob_bucket            = try(module.r2[0].bucket, "")
-  blob_endpoint_url      = try(module.r2[0].endpoint_url, "")
-  blob_access_key_id     = try(module.r2[0].access_key_id, "")
-  blob_secret_access_key = try(module.r2[0].secret_access_key, "")
+  # Media/blob wiring — inert (backend "none") unless media_enabled.
+  blob_backend           = var.media_enabled ? "s3" : "none"
+  blob_bucket            = try(data.terraform_remote_state.r2[0].outputs.bucket, "")
+  blob_endpoint_url      = try(data.terraform_remote_state.r2[0].outputs.endpoint_url, "")
+  blob_access_key_id     = try(data.terraform_remote_state.r2[0].outputs.access_key_id, "")
+  blob_secret_access_key = try(data.terraform_remote_state.r2[0].outputs.secret_access_key, "")
 }
 
 # Auto-fill the deployed /mcp endpoint into a GitHub Actions variable, so the

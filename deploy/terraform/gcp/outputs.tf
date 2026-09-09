@@ -19,6 +19,6 @@ output "runtime_service_account" {
 }
 
 output "media_bucket" {
-  description = "R2 media bucket name, or empty when media is disabled."
-  value       = try(module.r2[0].bucket, "")
+  description = "Shared R2 media bucket name (from the r2/ root), or empty when media is disabled."
+  value       = try(data.terraform_remote_state.r2[0].outputs.bucket, "")
 }

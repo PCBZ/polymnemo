@@ -39,14 +39,8 @@ variable "github_repository" {
   description = "GitHub repository name under github_owner."
 }
 
-variable "cf_account_id" {
-  type        = string
-  default     = ""
-  description = "Cloudflare account id for the R2 media bucket. Empty (default) leaves media/blob storage OFF; set it to provision R2 and turn the media tools on."
-}
-
-variable "media_bucket_name" {
-  type        = string
-  default     = "polymnemo-media"
-  description = "R2 bucket name for media blobs (used only when cf_account_id is set)."
+variable "media_enabled" {
+  type        = bool
+  default     = false
+  description = "Turn the media tools on by reading the shared r2/ root's state (the bucket + S3 creds). Requires the r2/ root applied first. Default false = media off (no Cloudflare dependency)."
 }

@@ -1,0 +1,12 @@
+# Copy to terraform.tfvars and fill in. terraform.tfvars and the state file hold
+# secrets — both are gitignored. Apply this root only if you want media on, then
+# set media_enabled=true in the gcp/ and/or azure/ root.
+#
+# Auth is via an env var, NOT a variable:
+#   export CLOUDFLARE_API_TOKEN=<token with R2 edit + API Tokens edit>
+
+cf_account_id = "your-cloudflare-account-id"
+
+# Optional overrides:
+# bucket_name = "polymnemo-media"
+# location    = "WNAM"   # WNAM | ENAM | WEUR | EEUR | APAC
