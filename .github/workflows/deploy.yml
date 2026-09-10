@@ -136,6 +136,9 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
+      # A docker-container builder is required for the GHA cache export below
+      # (the runner's default `docker` driver can't export a cache).
+      - uses: docker/setup-buildx-action@v3
       # build-push-action gives us a GitHub Actions layer cache, so unchanged
       # layers (deps + the embedding-model bake) are reused across deploys.
       - uses: docker/build-push-action@v6
