@@ -15,3 +15,9 @@ variable "name" {
   default     = "polymnemo"
   description = "Neon project name."
 }
+
+variable "history_retention_seconds" {
+  type        = number
+  default     = 21600
+  description = "Point-in-time restore window. The Neon Free plan caps this at 21600 (6h); raise on paid plans."
+}
