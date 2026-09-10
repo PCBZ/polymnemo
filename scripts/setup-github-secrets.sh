@@ -9,13 +9,13 @@
 #
 # Values are piped straight to `gh` — never printed, never echoed. The fill-in
 # file holds real secrets: it is gitignored, and this script offers to delete it
-# when done. ACR_NAME is a GitHub *variable* (not a secret); everything else is a
-# secret. Leave a value blank in the file to skip it.
+# when done. Every key here is a secret. Leave a value blank in the file to skip
+# it.
 
 set -euo pipefail
 
 FILE="${1:-scripts/github-secrets.env}"
-VARS=" ACR_NAME " # space-delimited set of keys that are variables, not secrets
+VARS=" " # space-delimited set of keys that are variables, not secrets (none now)
 
 command -v gh >/dev/null || { echo "error: gh (GitHub CLI) not installed." >&2; exit 1; }
 gh auth status >/dev/null 2>&1 || { echo "error: run 'gh auth login' first." >&2; exit 1; }

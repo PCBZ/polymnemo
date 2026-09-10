@@ -26,7 +26,7 @@ setup:
 2. **Push secrets** — fill `scripts/github-secrets.env` (copied from the
    `.template`) and run `bash scripts/setup-github-secrets.sh`. Sets the 8
    secrets (`ARM_*`, `NEON_API_KEY`, `CLOUDFLARE_API_TOKEN`, `CF_ACCOUNT_ID`,
-   `POLYMNEMO_API_KEYS`) + the `ACR_NAME` variable.
+   `POLYMNEMO_API_KEYS`).
 3. **State storage** — `az login`, then `bash scripts/bootstrap-tfstate-azure.sh`.
    Creates the state storage account/container and publishes
    `TFSTATE_RESOURCE_GROUP` / `TFSTATE_STORAGE_ACCOUNT` / `TFSTATE_CONTAINER` as
@@ -43,13 +43,21 @@ setup:
    branch, use Actions → *deploy (azure)* → Run workflow instead (image tagged
    with the commit SHA).
 
-The `azure` apply builds the image **inside ACR** (Terraform's
-`azurerm_container_registry_task`, no `az acr build` / azure login) from the
-triggering ref, and deploys it in one step. Re-runnable (shared remote state);
-`concurrency` blocks overlapping runs; the run forces a fresh build with
-`-replace`. The build clones the public repo, so `context_access_token` is the
-workflow's short-lived `GITHUB_TOKEN` — no extra secret (a private repo would
-need a real PAT).
+The `azure` job **builds the image in the runner and pushes it to GHCR**
+(`ghcr.io/<owner>/polymnemo:<tag>`, authenticated with the workflow's
+`GITHUB_TOKEN` — no extra secret), then Terraform deploys that image; Azure only
+runs it. (ACR Tasks are blocked on personal/student subscriptions, and the SP
+can't create the AcrPull role assignment, so the image lives on GHCR instead of
+ACR — public, so the app pulls it with no credentials.) Re-runnable (shared
+remote state); `concurrency` blocks overlapping runs.
+
+> **One-time:** make the GHCR `polymnemo` package **Public** (GitHub → your
+> profile → Packages → `polymnemo` → Package settings → Change visibility →
+> Public) so the app can pull it without credentials. Until it's public the app
+> can't start, and the `azure` job **fails** on its post-deploy readiness check
+> (it polls the app and errors if it never comes up) — so the first tagged deploy
+> pushes the image and goes red, then you flip the package Public and re-run the
+> `azure` job. Each run rolls a fresh revision, so the re-run picks up the change.
 
 The rest of this doc describes the same variables for a **local** apply.
 
@@ -66,8 +74,9 @@ The rest of this doc describes the same variables for a **local** apply.
 | `image` | gcp | Set on the **second** apply; empty on the bootstrap apply |
 
 Plus `export CLOUDFLARE_API_TOKEN=…` before applying the `r2` root (a token with
-R2 edit + API Tokens edit). **Azure path — 6 values:** swap `project_id` for
-`azure_subscription_id` + `acr_name` (globally unique); the rest match.
+R2 edit + API Tokens edit). **Azure path:** swap `project_id` for
+`azure_subscription_id`, and set `image` to the GHCR ref you pushed
+(`ghcr.io/<owner>/polymnemo:<tag>`, made Public); the rest match.
 
 Everything else has a default: `region`/`location`, `service_name`, instance
 sizing, `github_owner`/`github_repository`.

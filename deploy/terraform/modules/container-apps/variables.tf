@@ -13,27 +13,15 @@ variable "service_name" {
   description = "Container App name (and prefix for the environment / identity)."
 }
 
-variable "acr_name" {
+variable "image" {
   type        = string
-  description = "Azure Container Registry name — globally unique, 5-50 alphanumeric."
+  description = "Full container image reference the app runs, e.g. ghcr.io/pcbz/polymnemo:v1.0.0. Must be publicly pullable (no registry credentials are configured)."
 }
 
-variable "image_tag" {
+variable "revision_suffix" {
   type        = string
-  default     = "v1"
-  description = "Tag for the image built in ACR (polymnemo:<tag>) and run by the app."
-}
-
-variable "git_context" {
-  type        = string
-  default     = "https://github.com/PCBZ/polymnemo.git#main"
-  description = "Build context for the ACR task — the (public) repo + ref holding the Dockerfile."
-}
-
-variable "context_access_token" {
-  type        = string
-  sensitive   = true
-  description = "Token for the ACR task's Git context. Required by the provider even for a public repo; the workflow passes the short-lived GITHUB_TOKEN (enough to clone)."
+  default     = ""
+  description = "Appended to the revision name; set it to a per-deploy unique value (e.g. the CI run id) to force a fresh rollout even when the image ref is unchanged. Empty = Azure auto-generates one."
 }
 
 variable "database_url" {
