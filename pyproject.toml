@@ -1,6 +1,6 @@
 [project]
 name = "polymnemo"
-version = "0.0.1"
+version = "1.0.0"
 description = "A shared long-term memory across any LLM, over MCP"
 readme = "README.md"
 license = { file = "LICENSE" }
