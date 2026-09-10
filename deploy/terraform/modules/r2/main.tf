@@ -27,23 +27,31 @@ locals {
 
 # Resolve the R2 read/write permission-group ids by name rather than hardcoding
 # their uuids. The `name` filter narrows server-side to the R2 groups; we then
-# pick the exact two. Names resolve at apply against the live API — an upstream
-# rename would surface as a null id here, not silently. Skipped when creds are
-# supplied by hand.
-data "cloudflare_api_token_permission_groups_list" "r2" {
+# pick the exact one each returns. Cloudflare's `name` filter is an EXACT match,
+# not a prefix — a shared "Workers R2 Storage" value matches no group and returns
+# an empty list (which is what silently produced null ids before). So query each
+# full group name on its own. Names resolve at apply against the live API — an
+# upstream rename would surface as a `one()` error here, not silently. Skipped
+# when creds are supplied by hand.
+data "cloudflare_api_token_permission_groups_list" "r2_read" {
   count = local.derive_creds ? 1 : 0
-  name  = "Workers R2 Storage"
+  name  = "Workers R2 Storage Bucket Item Read"
+}
+
+data "cloudflare_api_token_permission_groups_list" "r2_write" {
+  count = local.derive_creds ? 1 : 0
+  name  = "Workers R2 Storage Bucket Item Write"
 }
 
 locals {
-  r2_read_pg = try(one([
-    for g in data.cloudflare_api_token_permission_groups_list.r2[0].result :
+  r2_read_pg = one([
+    for g in data.cloudflare_api_token_permission_groups_list.r2_read[0].result :
     g.id if g.name == "Workers R2 Storage Bucket Item Read"
-  ]), null)
-  r2_write_pg = try(one([
-    for g in data.cloudflare_api_token_permission_groups_list.r2[0].result :
+  ])
+  r2_write_pg = one([
+    for g in data.cloudflare_api_token_permission_groups_list.r2_write[0].result :
     g.id if g.name == "Workers R2 Storage Bucket Item Write"
-  ]), null)
+  ])
 }
 
 resource "cloudflare_api_token" "r2" {
