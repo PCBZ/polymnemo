@@ -2,7 +2,6 @@
 # runtime service account, the service itself, and public access. The DB URL and
 # API keys arrive as inputs (from the neon module / root) and are injected as env.
 
-# --- APIs -------------------------------------------------------------------
 resource "google_project_service" "services" {
   for_each = toset([
     "run.googleapis.com",
