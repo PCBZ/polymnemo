@@ -81,7 +81,7 @@ Requires **Python 3.11+**.
 ```bash
 python -m venv .venv
 source .venv/bin/activate            # Windows: .venv\Scripts\activate
-pip install -e ".[postgres]"         # add ,blob for media memories: ".[postgres,blob]"
+pip install -e .                     # add ".[dev]" for the test + lint tooling
 ```
 
 ### 2. Provision Postgres (pgvector)
