@@ -1,56 +1,28 @@
-# polymnemo as a Cloud Run service: APIs, Artifact Registry, a least-privilege
-# runtime service account, the service itself, and public access. The DB URL and
-# API keys arrive as inputs (from the neon module / root) and are injected as env.
+# polymnemo as a Cloud Run service: the run API, a least-privilege runtime
+# service account, the service itself, and public access. The image is the SAME
+# public GHCR image Azure runs (var.image, e.g. ghcr.io/pcbz/polymnemo:v1.0.0) —
+# Cloud Run can pull a public ghcr.io image directly, so there's no Artifact
+# Registry or Cloud Build here. The DB URL + API keys arrive as inputs (from the
+# neon/r2 roots) and are injected as env.
 
 resource "google_project_service" "services" {
   for_each = toset([
     "run.googleapis.com",
-    "artifactregistry.googleapis.com",
-    "cloudbuild.googleapis.com",
+    "iam.googleapis.com",
   ])
   service            = each.value
   disable_on_destroy = false
-}
-
-# --- Artifact Registry (Cloud Build pushes the image here) ------------------
-resource "google_artifact_registry_repository" "polymnemo" {
-  location      = var.region
-  repository_id = var.service_name
-  format        = "DOCKER"
-  description   = "polymnemo container images"
-  depends_on    = [google_project_service.services]
-
-  # Keep only the 3 most recent image versions; delete the rest so image
-  # storage can't creep up over time. KEEP wins over DELETE, so this nets to
-  # "retain the newest 3, delete everything older".
-  cleanup_policy_dry_run = false
-
-  cleanup_policies {
-    id     = "keep-latest-3"
-    action = "KEEP"
-    most_recent_versions {
-      keep_count = 3
-    }
-  }
-
-  cleanup_policies {
-    id     = "delete-older"
-    action = "DELETE"
-    condition {
-      tag_state = "ANY"
-    }
-  }
 }
 
 # --- Least-privilege runtime service account --------------------------------
 resource "google_service_account" "runtime" {
   account_id   = "${var.service_name}-run"
   display_name = "polymnemo Cloud Run runtime"
+  depends_on   = [google_project_service.services]
 }
 
-# --- Cloud Run service (skipped on the bootstrap apply, when image == "") ----
+# --- Cloud Run service (runs the public GHCR image directly) -----------------
 resource "google_cloud_run_v2_service" "polymnemo" {
-  count               = var.image == "" ? 0 : 1
   name                = var.service_name
   location            = var.region
   ingress             = "INGRESS_TRAFFIC_ALL"
@@ -107,8 +79,7 @@ resource "google_cloud_run_v2_service" "polymnemo" {
 
 # --- Public access: anyone can reach the URL; polymnemo enforces bearer auth --
 resource "google_cloud_run_v2_service_iam_member" "public" {
-  count    = var.image == "" ? 0 : 1
-  name     = google_cloud_run_v2_service.polymnemo[0].name
+  name     = google_cloud_run_v2_service.polymnemo.name
   location = var.region
   role     = "roles/run.invoker"
   member   = "allUsers"

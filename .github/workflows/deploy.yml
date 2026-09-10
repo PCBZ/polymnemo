@@ -131,6 +131,9 @@ jobs:
           elif [ -n "$INPUT_TAG" ]; then tag="$INPUT_TAG"
           else tag="$SHA"; fi
           echo "TF_VAR_image=ghcr.io/${OWNER,,}/polymnemo:${tag}" >> "$GITHUB_ENV"
+          # Also publish a moving :latest tag so the GCP backup deploy has a
+          # stable "current" ref to pull.
+          echo "IMAGE_LATEST=ghcr.io/${OWNER,,}/polymnemo:latest" >> "$GITHUB_ENV"
       - uses: docker/login-action@v3
         with:
           registry: ghcr.io
@@ -145,7 +148,9 @@ jobs:
         with:
           context: .
           push: true
-          tags: ${{ env.TF_VAR_image }}
+          tags: |
+            ${{ env.TF_VAR_image }}
+            ${{ env.IMAGE_LATEST }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
       - uses: hashicorp/setup-terraform@v3

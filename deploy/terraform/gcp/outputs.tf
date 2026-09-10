@@ -1,10 +1,5 @@
-output "image_repo" {
-  description = "Push the image here (append :TAG) via `gcloud builds submit`."
-  value       = module.cloud_run.image_repo
-}
-
 output "service_url" {
-  description = "Cloud Run HTTPS URL. Empty until the service is created (image set)."
+  description = "Cloud Run HTTPS URL."
   value       = module.cloud_run.service_url
 }
 

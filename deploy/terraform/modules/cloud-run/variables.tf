@@ -10,12 +10,12 @@ variable "region" {
 
 variable "service_name" {
   type        = string
-  description = "Cloud Run service name (also the Artifact Registry repo id)."
+  description = "Cloud Run service name."
 }
 
 variable "image" {
   type        = string
-  description = "Full Artifact Registry image URI incl. tag. Empty on the bootstrap apply (the service is then skipped)."
+  description = "Full public image reference incl. tag, e.g. ghcr.io/pcbz/polymnemo:v1.0.0 (Cloud Run pulls it directly)."
 }
 
 variable "database_url" {
