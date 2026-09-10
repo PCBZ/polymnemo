@@ -169,10 +169,16 @@ jobs:
           # and fail the job loudly otherwise.
           echo "Waiting for the app at $url to come up…"
           for i in $(seq 1 30); do
-            code=$(curl -sS -o /dev/null -w '%{http_code}' --max-time 10 "$url" || echo 000)
+            # On a failed/timed-out request curl exits non-zero; overwrite (not
+            # append) so code is a clean "000", never a false-positive like
+            # "000000". Only a real app response (2xx/3xx/4xx) counts as up — a
+            # 000 (no reply) or 5xx (no healthy backend) keeps waiting.
+            code=$(curl -sS -o /dev/null -w '%{http_code}' --max-time 10 "$url") || code=000
             echo "  [$i] HTTP $code"
-            if [ "$code" != 000 ]; then echo "App is up (HTTP $code)."; exit 0; fi
+            case "$code" in
+              2??|3??|4??) echo "App is up (HTTP $code)."; exit 0 ;;
+            esac
             sleep 10
           done
-          echo "::error::App never responded (~5 min) — is the GHCR package Public?"
+          echo "::error::App never responded (~5 min) — check the container logs."
           exit 1
