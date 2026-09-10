@@ -1,8 +1,12 @@
 name: deploy (azure)
 
-# Manual deploy to Azure Container Apps. All secrets come from GitHub
-# Secrets/Variables (see scripts/setup-github-secrets.sh and
-# scripts/bootstrap-tfstate-azure.sh); nothing is stored in the repo.
+# Deploy to Azure Container Apps. Primary trigger is a **v* release tag**: it
+# builds + runs that exact tag (image tagged with the version) and, via
+# registry-publish.yml (same tag trigger), publishes the registry entry — so one
+# tag = deployed state = registered version. workflow_dispatch stays for manual/
+# emergency deploys of a branch. All secrets come from GitHub Secrets/Variables
+# (see scripts/setup-github-secrets.sh and scripts/bootstrap-tfstate-azure.sh);
+# nothing is stored in the repo.
 #
 # Job graph (GitHub renders this live in the run's "graph" view):
 #
@@ -13,10 +17,12 @@ name: deploy (azure)
 # (neon is covered transitively via schema, and the app never starts before its
 # tables exist).
 on:
+  push:
+    tags: ["v*"]
   workflow_dispatch:
     inputs:
       image_tag:
-        description: "Image tag (optional; defaults to the commit SHA so each new commit rolls out)"
+        description: "Image tag for a manual deploy (optional; defaults to the commit SHA). Ignored on a v* tag push."
         required: false
         default: ""
 
@@ -104,10 +110,12 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     env:
-      # Default the tag to the commit SHA so each new commit changes the app's
-      # image ref and actually rolls out a new revision (a static tag would
-      # rebuild in ACR but leave the app template unchanged -> no redeploy).
-      TF_VAR_image_tag: ${{ inputs.image_tag != '' && inputs.image_tag || github.sha }}
+      # On a v* tag: the version is the image tag. On a manual dispatch: the
+      # input tag, else the commit SHA (so each commit rolls a new revision).
+      TF_VAR_image_tag: ${{ github.ref_type == 'tag' && github.ref_name || (inputs.image_tag != '' && inputs.image_tag || github.sha) }}
+      # Build the image from the SAME ref that triggered this run (the tag on a
+      # release, the branch on a dispatch), so a tagged deploy builds that tag.
+      TF_VAR_git_context: https://github.com/PCBZ/polymnemo.git#${{ github.ref_name }}
       TF_VAR_context_access_token: ${{ secrets.GITHUB_TOKEN }}
     steps:
       - uses: actions/checkout@v4

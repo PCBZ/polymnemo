@@ -31,16 +31,25 @@ setup:
    Creates the state storage account/container and publishes
    `TFSTATE_RESOURCE_GROUP` / `TFSTATE_STORAGE_ACCOUNT` / `TFSTATE_CONTAINER` as
    GitHub variables.
-4. **Run it** — Actions tab → *deploy (azure)* → Run workflow. It applies
-   `neon` → schema → `r2` → `azure`. The `azure` apply builds the image **inside
-   ACR** (Terraform's `azurerm_container_registry_task`, no `az acr build` / azure
-   login) and deploys it in one step, then prints the MCP endpoint. Re-runnable
-   (shared remote state); `concurrency` blocks overlapping runs; the run forces a
-   fresh image build each time with `-replace`.
+4. **Cut a release** — push a `v*` tag; the deploy runs on it (and
+   registry-publish runs on the same tag), so **one tag = deployed state =
+   registered version**:
+   ```bash
+   git tag v0.1.0 && git push origin v0.1.0
+   ```
+   It builds + runs **that tag** (image tagged `polymnemo:v0.1.0`, built from the
+   tag ref) and applies `neon` → schema → `r2` → `azure`, then prints the MCP
+   endpoint. Rollback = deploy an older tag. For a manual/emergency deploy of a
+   branch, use Actions → *deploy (azure)* → Run workflow instead (image tagged
+   with the commit SHA).
 
-The image build clones the public repo, so the build's `context_access_token` is
-the workflow's short-lived `GITHUB_TOKEN` — no extra secret. (A private repo
-would need a real PAT here instead.)
+The `azure` apply builds the image **inside ACR** (Terraform's
+`azurerm_container_registry_task`, no `az acr build` / azure login) from the
+triggering ref, and deploys it in one step. Re-runnable (shared remote state);
+`concurrency` blocks overlapping runs; the run forces a fresh build with
+`-replace`. The build clones the public repo, so `context_access_token` is the
+workflow's short-lived `GITHUB_TOKEN` — no extra secret (a private repo would
+need a real PAT).
 
 The rest of this doc describes the same variables for a **local** apply.
 
