@@ -74,6 +74,10 @@ resource "azurerm_container_app" "this" {
     min_replicas = var.min_replicas
     max_replicas = var.max_replicas
 
+    # A changing suffix forces a new revision each deploy (so a re-run actually
+    # rolls out); empty lets Azure auto-generate one.
+    revision_suffix = var.revision_suffix != "" ? var.revision_suffix : null
+
     container {
       name   = var.service_name
       image  = var.image

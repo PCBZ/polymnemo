@@ -26,6 +26,12 @@ variable "image" {
   description = "Full container image reference to run, e.g. ghcr.io/pcbz/polymnemo:v1.0.0. Built + pushed by the deploy workflow; must be publicly pullable. The workflow sets it to the triggering tag/SHA."
 }
 
+variable "revision_suffix" {
+  type        = string
+  default     = ""
+  description = "Per-deploy unique value (the workflow sets the CI run id) that forces a fresh Container App revision even when the image ref is unchanged. Empty = Azure auto-generates one."
+}
+
 variable "api_keys" {
   type        = string
   sensitive   = true

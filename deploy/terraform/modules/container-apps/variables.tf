@@ -18,6 +18,12 @@ variable "image" {
   description = "Full container image reference the app runs, e.g. ghcr.io/pcbz/polymnemo:v1.0.0. Must be publicly pullable (no registry credentials are configured)."
 }
 
+variable "revision_suffix" {
+  type        = string
+  default     = ""
+  description = "Appended to the revision name; set it to a per-deploy unique value (e.g. the CI run id) to force a fresh rollout even when the image ref is unchanged. Empty = Azure auto-generates one."
+}
+
 variable "database_url" {
   type        = string
   sensitive   = true

@@ -53,9 +53,11 @@ remote state); `concurrency` blocks overlapping runs.
 
 > **One-time:** make the GHCR `polymnemo` package **Public** (GitHub → your
 > profile → Packages → `polymnemo` → Package settings → Change visibility →
-> Public) so the app can pull it without credentials. Until it's public, the app
-> can't start — the first tagged deploy pushes the image, then flip it public and
-> re-run the `azure` job.
+> Public) so the app can pull it without credentials. Until it's public the app
+> can't start, and the `azure` job **fails** on its post-deploy readiness check
+> (it polls the app and errors if it never comes up) — so the first tagged deploy
+> pushes the image and goes red, then you flip the package Public and re-run the
+> `azure` job. Each run rolls a fresh revision, so the re-run picks up the change.
 
 The rest of this doc describes the same variables for a **local** apply.
 

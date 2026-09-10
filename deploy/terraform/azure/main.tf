@@ -43,6 +43,7 @@ module "container_apps" {
   location            = var.location
   service_name        = var.service_name
   image               = var.image
+  revision_suffix     = var.revision_suffix
   database_url        = data.terraform_remote_state.neon.outputs.connection_uri_pooler
   api_keys            = var.api_keys
 
