@@ -41,6 +41,7 @@ module "container_apps" {
   service_name         = var.service_name
   acr_name             = var.acr_name
   image_tag            = var.image_tag
+  git_context          = var.git_context
   context_access_token = var.context_access_token
   database_url         = data.terraform_remote_state.neon.outputs.connection_uri_pooler
   api_keys             = var.api_keys

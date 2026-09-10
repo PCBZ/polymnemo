@@ -32,6 +32,12 @@ variable "image_tag" {
   description = "Tag for the image Terraform builds in ACR and runs (polymnemo:<tag>)."
 }
 
+variable "git_context" {
+  type        = string
+  default     = "https://github.com/PCBZ/polymnemo.git#main"
+  description = "Git ref the ACR build task clones (repo#ref). The deploy workflow sets it to the triggering tag or branch, so a tagged deploy builds that tag."
+}
+
 variable "context_access_token" {
   type        = string
   sensitive   = true
