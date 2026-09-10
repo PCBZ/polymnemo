@@ -22,6 +22,7 @@ logger = logging.getLogger("polymnemo")
 
 mcp: FastMCP = FastMCP(
     name="polymnemo",
+    version=__version__,
     instructions=(
         "Shared long-term memory across any LLM. Authenticate with a per-user "
         "bearer key; use `remember` to store and `recall` to search semantically."
