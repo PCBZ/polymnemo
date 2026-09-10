@@ -2,7 +2,7 @@
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
   "name": "io.github.PCBZ/polymnemo",
   "title": "polymnemo",
-  "description": "A shared long-term memory across any LLM, over MCP — semantic recall, sessions, and multimedia, backed by Postgres + pgvector with local embeddings (no generative-LLM calls).",
+  "description": "Shared cross-LLM long-term memory over MCP: semantic recall, sessions, and media (pgvector).",
   "repository": {
     "url": "https://github.com/PCBZ/polymnemo",
     "source": "github"
