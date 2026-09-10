@@ -11,7 +11,7 @@
   "remotes": [
     {
       "type": "streamable-http",
-      "url": "https://REPLACE_WITH_YOUR_DEPLOYED_URL/mcp",
+      "url": "https://polymnemo.purpleground-26f6d744.westus2.azurecontainerapps.io/mcp",
       "headers": [
         {
           "name": "Authorization",

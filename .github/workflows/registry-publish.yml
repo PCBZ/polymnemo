@@ -7,8 +7,10 @@ name: Publish to MCP Registry
 # The public endpoint comes from either the workflow_dispatch `mcp_endpoint`
 # input (type it in when you click "Run workflow") or, if that's blank, the
 # MCP_ENDPOINT repo variable. On a release tag (v*) the version is taken from the
-# tag. It syncs server.json (url [+ version on a tag]), commits that back to
-# main, then publishes. No-ops if no endpoint is available from either source.
+# tag. It syncs server.json in the runner and publishes that — it does NOT push
+# back to main (branch protection blocks that, and publish doesn't need it); the
+# committed server.json is kept correct directly. No-ops if no endpoint is
+# available from either source.
 
 on:
   workflow_dispatch:
@@ -25,11 +27,11 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       id-token: write # OIDC token to authenticate to the registry
-      contents: write # push the synced server.json back to main
+      contents: read
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: main # edit + push server.json on the default branch
+          ref: main # publish the canonical server.json from the default branch
 
       - name: Resolve endpoint (dispatch input, else repo variable)
         id: check
@@ -58,17 +60,6 @@ jobs:
             jq --arg url "$ENDPOINT" '.remotes[0].url = $url' server.json > server.json.tmp
           fi
           mv server.json.tmp server.json
-
-      - name: Commit + push if server.json changed
-        if: steps.check.outputs.ready == 'true'
-        run: |
-          if ! git diff --quiet -- server.json; then
-            git config user.name "github-actions[bot]"
-            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-            git add server.json
-            git commit -m "chore(registry): sync server.json (${GITHUB_REF_NAME})"
-            git push origin HEAD:main
-          fi
 
       - name: Install mcp-publisher
         if: steps.check.outputs.ready == 'true'
