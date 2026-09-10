@@ -22,9 +22,12 @@ ENV PYTHONUNBUFFERED=1 \
 WORKDIR /app
 
 # Install the package. README/LICENSE are referenced by pyproject metadata.
+# postgres = the durable store; blob = boto3 for the S3/R2 media backend, which
+# the deploy always enables (POLYMNEMO_BLOB_BACKEND=s3) — without it the app
+# crashes on startup importing boto3.
 COPY pyproject.toml README.md LICENSE ./
 COPY src ./src
-RUN pip install --no-cache-dir ".[postgres]"
+RUN pip install --no-cache-dir ".[postgres,blob]"
 
 # Bake the embedding model AND its tokenizer (used for token-aware chunking)
 # into the image so cold starts don't download them (first request still
