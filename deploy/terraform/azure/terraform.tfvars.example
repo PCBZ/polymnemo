@@ -3,15 +3,13 @@
 
 azure_subscription_id = "00000000-0000-0000-0000-000000000000"
 location              = "westus2"
-acr_name              = "polymnemoacr123" # globally unique, alphanumeric
+image                 = "ghcr.io/pcbz/polymnemo:v1.0.0"
 api_keys              = "sk-alice-secret:alice,sk-bob-secret:bob"
 
-# Terraform builds the image IN ACR from the public repo (no `az acr build`).
-# image_tag defaults to "v1". context_access_token is required by the provider
-# even for a public repo — pass a GitHub token that can clone it (via the env var
-# TF_VAR_context_access_token, not here, so it stays out of tfvars):
-#   export TF_VAR_context_access_token=<github token>
-# image_tag = "v1"
+# The app runs a PUBLIC image from GHCR. Build + push it yourself first, and make
+# the GHCR package Public once so the app can pull without credentials:
+#   docker build -t ghcr.io/pcbz/polymnemo:v1.0.0 . && docker push ghcr.io/pcbz/polymnemo:v1.0.0
+# (The deploy workflow does this for you on a v* tag.)
 
 # --- Media (Cloudflare R2) --------------------------------------------------
 # Media is always on. Apply the shared deploy/terraform/r2 root FIRST (it owns

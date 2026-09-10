@@ -2,15 +2,18 @@
 # from the neon root's state — so memories are shared with the GCP deployment.
 # Apply the neon root (and its schema.sql) first.
 #
-# Usually applied by the CI workflow (.github/workflows/deploy.yml). One apply
-# does everything — Terraform builds the image IN ACR (no `az acr build`) and
-# deploys it. Manual flow, after neon/ + r2/ are applied (state lives in the
-# Azure Storage backend — pass `-backend-config=...key=azure.tfstate` at init):
-#   1. cp terraform.tfvars.example terraform.tfvars   # subscription, acr_name, api_keys, tfstate_*
-#      export TF_VAR_context_access_token=<a GitHub token that can clone the repo>
-#   2. terraform init -backend-config=... && terraform apply
-#   3. terraform output -raw mcp_endpoint
-# Re-deploy new code: `terraform apply -replace=module.container_apps.azurerm_container_registry_task_schedule_run_now.build`
+# The app runs a PUBLIC image from GHCR (var.image), built + pushed by the deploy
+# workflow — Azure only runs it. (ACR Tasks are blocked on personal/student subs;
+# see the module header.) Manual flow, after neon/ + r2/ are applied (state lives
+# in the Azure Storage backend — pass `-backend-config=...key=azure.tfstate`):
+#   1. Build + push the image yourself, e.g.
+#      docker build -t ghcr.io/pcbz/polymnemo:v1.0.0 . && docker push ghcr.io/pcbz/polymnemo:v1.0.0
+#      (make the GHCR package Public once, so the app can pull without creds).
+#   2. cp terraform.tfvars.example terraform.tfvars   # subscription, image, api_keys, tfstate_*
+#   3. terraform init -backend-config=... && terraform apply
+#   4. terraform output -raw mcp_endpoint
+# Re-deploy new code: push a new image tag and `terraform apply` with the new
+# TF_VAR_image.
 
 # Reads the shared Neon and R2 roots' state from the Azure Storage backend, so
 # CI (and multiple operators) stay in sync. Apply neon/ and r2/ before this root.
@@ -35,16 +38,13 @@ data "terraform_remote_state" "r2" {
 }
 
 module "container_apps" {
-  source               = "../modules/container-apps"
-  resource_group_name  = var.resource_group_name
-  location             = var.location
-  service_name         = var.service_name
-  acr_name             = var.acr_name
-  image_tag            = var.image_tag
-  git_context          = var.git_context
-  context_access_token = var.context_access_token
-  database_url         = data.terraform_remote_state.neon.outputs.connection_uri_pooler
-  api_keys             = var.api_keys
+  source              = "../modules/container-apps"
+  resource_group_name = var.resource_group_name
+  location            = var.location
+  service_name        = var.service_name
+  image               = var.image
+  database_url        = data.terraform_remote_state.neon.outputs.connection_uri_pooler
+  api_keys            = var.api_keys
 
   # Media/blob wiring — always on, from the shared r2/ root.
   blob_backend           = "s3"

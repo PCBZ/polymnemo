@@ -45,7 +45,6 @@ env:
   TF_VAR_cf_account_id: ${{ secrets.CF_ACCOUNT_ID }}
   TF_VAR_api_keys: ${{ secrets.POLYMNEMO_API_KEYS }}
   TF_VAR_azure_subscription_id: ${{ secrets.ARM_SUBSCRIPTION_ID }}
-  TF_VAR_acr_name: ${{ vars.ACR_NAME }}
   TF_VAR_tfstate_resource_group: ${{ vars.TFSTATE_RESOURCE_GROUP }}
   TF_VAR_tfstate_storage_account: ${{ vars.TFSTATE_STORAGE_ACCOUNT }}
   TF_VAR_tfstate_container: ${{ vars.TFSTATE_CONTAINER }}
@@ -109,26 +108,34 @@ jobs:
     needs: [r2, schema]
     runs-on: ubuntu-latest
     timeout-minutes: 30
-    env:
-      # On a v* tag: the version is the image tag. On a manual dispatch: the
-      # input tag, else the commit SHA (so each commit rolls a new revision).
-      TF_VAR_image_tag: ${{ github.ref_type == 'tag' && github.ref_name || (inputs.image_tag != '' && inputs.image_tag || github.sha) }}
-      # Build the image from the SAME ref that triggered this run (the tag on a
-      # release, the branch on a dispatch), so a tagged deploy builds that tag.
-      TF_VAR_git_context: https://github.com/PCBZ/polymnemo.git#${{ github.ref_name }}
-      TF_VAR_context_access_token: ${{ secrets.GITHUB_TOKEN }}
+    # `packages: write` lets this job push the image to GHCR with GITHUB_TOKEN.
+    permissions:
+      contents: read
+      packages: write
     steps:
       - uses: actions/checkout@v4
+      # ACR Tasks are blocked on personal/student subscriptions, so build the
+      # image here and push it to GHCR (free, and shows on the repo's Packages).
+      # Tag = the version on a v* tag, else the dispatch input, else the SHA.
+      - name: Resolve image reference
+        run: |
+          tag='${{ github.ref_type == 'tag' && github.ref_name || (inputs.image_tag != '' && inputs.image_tag || github.sha) }}'
+          owner='${{ github.repository_owner }}'
+          echo "TF_VAR_image=ghcr.io/${owner,,}/polymnemo:${tag}" >> "$GITHUB_ENV"
+      - name: Build and push image to GHCR
+        run: |
+          echo '${{ secrets.GITHUB_TOKEN }}' | docker login ghcr.io -u '${{ github.actor }}' --password-stdin
+          docker build -t "$TF_VAR_image" .
+          docker push "$TF_VAR_image"
       - uses: hashicorp/setup-terraform@v3
         with:
           terraform_version: "1.13.2"
-      # Terraform builds the image IN ACR (no az/docker) and deploys it in one
-      # apply. `-replace` forces a fresh build each run (schedule_run_now
-      # otherwise runs only on create; harmless warning on the very first run).
-      - name: Terraform apply (build + deploy)
+      # Deploy the just-pushed image. NOTE: the GHCR package must be Public (a
+      # one-time flip in the repo's Package settings) so the app can pull it
+      # without credentials — otherwise the app fails to start.
+      - name: Terraform apply (deploy app)
         working-directory: deploy/terraform/azure
         run: |
           terraform init $TF_BACKEND -backend-config=key=azure.tfstate
-          terraform apply -auto-approve \
-            -replace=module.container_apps.azurerm_container_registry_task_schedule_run_now.build
+          terraform apply -auto-approve
           echo "MCP endpoint: $(terraform output -raw mcp_endpoint)"

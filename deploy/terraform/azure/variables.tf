@@ -21,27 +21,9 @@ variable "service_name" {
   description = "Container App name."
 }
 
-variable "acr_name" {
+variable "image" {
   type        = string
-  description = "Azure Container Registry name — globally unique, 5-50 alphanumeric (e.g. polymnemoacr123)."
-}
-
-variable "image_tag" {
-  type        = string
-  default     = "v1"
-  description = "Tag for the image Terraform builds in ACR and runs (polymnemo:<tag>)."
-}
-
-variable "git_context" {
-  type        = string
-  default     = "https://github.com/PCBZ/polymnemo.git#main"
-  description = "Git ref the ACR build task clones (repo#ref). The deploy workflow sets it to the triggering tag or branch, so a tagged deploy builds that tag."
-}
-
-variable "context_access_token" {
-  type        = string
-  sensitive   = true
-  description = "Token for the ACR build task's Git context. Required even for a public repo; the workflow passes the short-lived GITHUB_TOKEN."
+  description = "Full container image reference to run, e.g. ghcr.io/pcbz/polymnemo:v1.0.0. Built + pushed by the deploy workflow; must be publicly pullable. The workflow sets it to the triggering tag/SHA."
 }
 
 variable "api_keys" {
