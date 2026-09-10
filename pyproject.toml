@@ -12,38 +12,16 @@ classifiers = [
     "License :: OSI Approved :: MIT License",
     "Operating System :: OS Independent",
 ]
-# Kept intentionally minimal for the Phase 0 #1 skeleton. Later issues add their
-# own deps: embeddings (#3 -> fastembed, numpy), Postgres store (#6 -> psycopg,
-# pgvector), tests (#13 -> pytest).
 dependencies = [
     "fastmcp>=2.0",
-    # Declarative env-var config (already pulled in transitively by fastmcp;
-    # depended on directly since config.py imports it).
     "pydantic-settings>=2.0",
-    # Local, deterministic embeddings (ONNX, no API key). Brings numpy.
-    # Pinned to the 0.8.x line: fastembed 0.8.0 switched this model's pooling
-    # from CLS to mean, which changes the vectors. Stored embeddings and query
-    # embeddings must come from the SAME pooling, so crossing that boundary
-    # (e.g. an old <0.8 install, or a future 0.9 that changes it again) would
-    # silently degrade recall. Bumping past <0.9 is a deliberate, reviewed step
-    # that may require re-embedding everything. See issue #38.
     "fastembed>=0.8,<0.9",
-    # Token-aware chunking (Rust; respects the model's context window).
     "semantic-text-splitter>=0.13",
-    # HF tokenizer used to size chunks in tokens (also a fastembed dep).
     "tokenizers>=0.15",
-    # Global token-bucket rate limiter (opt-in via POLYMNEMO_RATELIMIT_ENABLED).
     "pyrate-limiter>=3,<4",
-    # Durable store (Neon + pgvector): the SQLAlchemy ORM/core, the psycopg
-    # driver, and pgvector's SQLAlchemy type. Required — the server runs with
-    # POLYMNEMO_REQUIRE_DATABASE=true and the deployed image always uses it.
-    # (Still imported lazily by PostgresStore, but always installed.)
     "sqlalchemy>=2.0",
     "psycopg[binary]>=3.1",
     "pgvector>=0.3",
-    # Object storage for media memories (#44): boto3 for the S3/R2 backend.
-    # Required — the deploy always enables media (POLYMNEMO_BLOB_BACKEND=s3).
-    # (Still imported lazily by S3BlobStore, but always installed.)
     "boto3>=1.34",
 ]
 

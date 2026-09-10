@@ -29,7 +29,6 @@ resource "azurerm_container_app_environment" "this" {
   log_analytics_workspace_id = azurerm_log_analytics_workspace.this.id
 }
 
-# --- The app -----------------------------------------------------------------
 # Pulls a PUBLIC image from GHCR, so no `identity` / `registry` credentials are
 # needed.
 resource "azurerm_container_app" "this" {
