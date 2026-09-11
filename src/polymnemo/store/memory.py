@@ -79,7 +79,7 @@ class InMemoryStore:
             out.append(clone)
         return out
 
-    def list(
+    def list_memories(
         self,
         user_id: str,
         namespace: str,
