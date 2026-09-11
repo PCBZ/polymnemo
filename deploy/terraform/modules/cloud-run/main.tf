@@ -1,9 +1,13 @@
 # polymnemo as a Cloud Run service: the run API, a least-privilege runtime
 # service account, the service itself, and public access. The image is the SAME
-# public GHCR image Azure runs (var.image, e.g. ghcr.io/pcbz/polymnemo:v1.0.0) —
-# Cloud Run can pull a public ghcr.io image directly, so there's no Artifact
-# Registry or Cloud Build here. The DB URL + API keys arrive as inputs (from the
-# neon/r2 roots) and are injected as env.
+# public GHCR image Azure runs (var.image, e.g. ghcr.io/pcbz/polymnemo:v1.0.0).
+# Cloud Run can pull a PUBLIC ghcr.io image directly ("You can directly use
+# container images stored in Artifact Registry, or public images from Docker Hub
+# or GitHub Container Registry" — cloud.google.com/run/docs/deploying), so there's
+# no Artifact Registry or Cloud Build here. (Caveat: Cloud Run caches a public
+# GHCR image for up to ~1h; a remote AR repo is Google's recommendation for
+# higher availability, not a requirement.) The DB URL + API keys arrive as inputs
+# (from the neon/r2 roots) and are injected as env.
 
 resource "google_project_service" "services" {
   for_each = toset([
@@ -29,6 +33,12 @@ resource "google_cloud_run_v2_service" "polymnemo" {
   deletion_protection = false
 
   template {
+    # A per-deploy unique suffix forces a fresh revision even when the image ref
+    # is unchanged (e.g. re-running the same tag) — the parallel to Azure's
+    # revision_suffix. Empty lets Cloud Run auto-name it. (Note: a moved :latest
+    # can still serve GHCR's ~1h-cached digest, so prefer a version tag for a
+    # deterministic rollout.)
+    revision                         = var.revision_suffix != "" ? "${var.service_name}-${var.revision_suffix}" : null
     service_account                  = google_service_account.runtime.email
     max_instance_request_concurrency = var.concurrency
     timeout                          = "120s"

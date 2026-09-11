@@ -70,6 +70,14 @@ Terraform apply. It reads the shared state from Azure Storage, so it needs
 **both** GCP auth **and** the `ARM_*` secrets. It registers no MCP endpoint of its
 own: Azure's (in `server.json`) is the one canonical endpoint both clouds share.
 
+This is a **warm standby**, not automatic failover — GCP's Cloud Run URL differs
+from Azure's and is never published. What's shared automatically is the *data*
+(same Neon + R2), not the routing. So to actually fail over when Azure is down,
+you repoint the endpoint yourself: set `server.json`'s `remotes[0].url` (or the
+`mcp_endpoint` input) to the GCP URL and re-run *Publish to MCP Registry*. (A
+shared custom domain / load balancer in front of both would make this automatic —
+not set up here.)
+
 One-time setup (in addition to the Azure secrets):
 
 1. **Service account** — create a GCP SA with roles: `roles/run.admin`,

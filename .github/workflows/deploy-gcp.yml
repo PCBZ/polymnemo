@@ -60,6 +60,10 @@ jobs:
           terraform_version: "1.13.2"
       - name: Terraform apply (deploy Cloud Run)
         working-directory: deploy/terraform/gcp
+        env:
+          # A fresh revision suffix every run forces a real rollout even when the
+          # image ref is unchanged (e.g. re-running the same tag).
+          TF_VAR_revision_suffix: r${{ github.run_id }}-${{ github.run_attempt }}
         run: |
           terraform init $TF_BACKEND -backend-config=key=gcp.tfstate
           terraform apply -auto-approve

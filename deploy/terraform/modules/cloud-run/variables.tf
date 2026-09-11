@@ -18,6 +18,12 @@ variable "image" {
   description = "Full public image reference incl. tag, e.g. ghcr.io/pcbz/polymnemo:v1.0.0 (Cloud Run pulls it directly)."
 }
 
+variable "revision_suffix" {
+  type        = string
+  default     = ""
+  description = "Appended to the revision name (as <service>-<suffix>); set a per-deploy unique value (e.g. the CI run id) to force a fresh rollout even when the image ref is unchanged. Empty = Cloud Run auto-names it."
+}
+
 variable "database_url" {
   type        = string
   sensitive   = true

@@ -20,6 +20,12 @@ variable "image" {
   description = "Full public image reference incl. tag, e.g. ghcr.io/pcbz/polymnemo:v1.0.0. The SAME image Azure runs; Cloud Run pulls it from GHCR directly."
 }
 
+variable "revision_suffix" {
+  type        = string
+  default     = ""
+  description = "Per-deploy unique value (the workflow sets the CI run id) that forces a fresh Cloud Run revision even when the image ref is unchanged. Empty = Cloud Run auto-names it."
+}
+
 variable "api_keys" {
   type        = string
   sensitive   = true

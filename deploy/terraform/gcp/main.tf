@@ -18,6 +18,12 @@
 #
 # It does NOT register its own MCP endpoint: Azure is primary, and the registered
 # endpoint (in server.json) is the single canonical one both clouds share.
+#
+# This makes GCP a WARM STANDBY, not automatic failover: GCP's Cloud Run URL
+# differs from Azure's and is never published, so if Azure is down, the canonical
+# endpoint is dead until someone manually repoints server.json to the GCP URL and
+# re-runs registry-publish (or fronts both with a shared custom domain / LB — not
+# done here). What's automatic is the shared *data* (same Neon + R2), not routing.
 data "terraform_remote_state" "neon" {
   backend = "azurerm"
   config = {
@@ -39,13 +45,14 @@ data "terraform_remote_state" "r2" {
 }
 
 module "cloud_run" {
-  source       = "../modules/cloud-run"
-  project_id   = var.project_id
-  region       = var.region
-  service_name = var.service_name
-  image        = var.image
-  database_url = data.terraform_remote_state.neon.outputs.connection_uri_pooler
-  api_keys     = var.api_keys
+  source          = "../modules/cloud-run"
+  project_id      = var.project_id
+  region          = var.region
+  service_name    = var.service_name
+  image           = var.image
+  revision_suffix = var.revision_suffix
+  database_url    = data.terraform_remote_state.neon.outputs.connection_uri_pooler
+  api_keys        = var.api_keys
 
   # Media/blob wiring — always on, from the shared r2/ root.
   blob_backend           = "s3"
