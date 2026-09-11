@@ -23,7 +23,6 @@ from __future__ import annotations
 import contextlib
 
 import httpx
-import pytest
 from asgi_lifespan import LifespanManager
 
 from polymnemo.config import settings
@@ -65,29 +64,48 @@ async def _replica(stateless: bool):
             yield client
 
 
-@pytest.mark.parametrize("stateless", [False, True])
-async def test_request_survives_cross_replica_routing(stateless: bool) -> None:
+async def test_stateful_transport_breaks_across_replicas() -> None:
+    """stateless_http=False: the session lives in replica A's memory, so a
+    follow-up routed to replica B is rejected. This is the bug we're fixing — and
+    it failing here proves the two-replica simulation is real (the apps have
+    independent session stores)."""
     async with (
-        _replica(stateless) as replica_a,
-        _replica(stateless) as replica_b,
+        _replica(stateless=False) as replica_a,
+        _replica(stateless=False) as replica_b,
     ):
-        # initialize on replica A — a stateful server creates the session here.
+        # initialize on replica A — the stateful server creates the session here.
         init = await replica_a.post(settings.mcp_path, json=_INIT, headers=_HEADERS)
         assert init.status_code == 200
         session_id = init.headers.get("mcp-session-id")
+        assert session_id, "stateful mode should issue an mcp-session-id"
 
-        # a follow-up request routed to replica B (the round-robin case).
+        # the follow-up (carrying A's session id) lands on replica B, which never
+        # saw that session -> rejected.
+        resp = await replica_b.post(
+            settings.mcp_path,
+            json=_PING,
+            headers={**_HEADERS, "mcp-session-id": session_id},
+        )
+        assert resp.status_code in (400, 404), resp.text
+        assert "session" in resp.text.lower()
+
+
+async def test_stateless_transport_works_across_replicas() -> None:
+    """stateless_http=True: no per-replica session state, so the same follow-up
+    routed to a different replica is served fine. This is the fix."""
+    async with (
+        _replica(stateless=True) as replica_a,
+        _replica(stateless=True) as replica_b,
+    ):
+        # stateless initialize issues no session id; carry it only if present.
+        init = await replica_a.post(settings.mcp_path, json=_INIT, headers=_HEADERS)
+        assert init.status_code == 200
         headers = dict(_HEADERS)
+        session_id = init.headers.get("mcp-session-id")
         if session_id:
             headers["mcp-session-id"] = session_id
-        resp = await replica_b.post(settings.mcp_path, json=_PING, headers=headers)
 
-        if stateless:
-            # any replica can serve any request -> the fix works.
-            assert resp.status_code == 200, resp.text
-            assert "polymnemo" in resp.text
-        else:
-            # replica B never saw the session -> rejected (the pre-fix failure,
-            # and proof the two replicas have independent session stores).
-            assert resp.status_code in (400, 404), resp.text
-            assert "session" in resp.text.lower()
+        # a follow-up routed to a *different* replica still works.
+        resp = await replica_b.post(settings.mcp_path, json=_PING, headers=headers)
+        assert resp.status_code == 200, resp.text
+        assert "polymnemo" in resp.text
