@@ -32,6 +32,7 @@ dev = [
     "pytest-cov>=5",
     "ruff>=0.6",
     "asgi-lifespan>=2.1",  # run the ASGI app's lifespan in the transport test
+    "mypy>=1.11",
 ]
 
 [project.scripts]
@@ -74,3 +75,10 @@ select = ["E", "F", "I", "UP", "B", "RUF"]
 # conftest sets env vars BEFORE importing polymnemo, so its imports can't be at
 # the top of the file.
 "tests/conftest.py" = ["E402"]
+
+[tool.mypy]
+python_version = "3.11"
+plugins = ["pydantic.mypy"]
+# Introducing mypy on an existing codebase: third-party libs without type stubs
+# are treated as Any for now. Tighten (per-module strictness) over time.
+ignore_missing_imports = true

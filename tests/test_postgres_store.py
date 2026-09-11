@@ -65,8 +65,8 @@ def test_search_ranks_by_cosine(store):
 def test_list_pagination(store):
     for c in ["1", "2", "3"]:
         store.add(_mem(content=c), _vec((0, 1.0)))
-    assert len(store.list("alice", "shared", limit=2, offset=0)) == 2
-    assert len(store.list("alice", "shared", limit=2, offset=2)) == 1
+    assert len(store.list_memories("alice", "shared", limit=2, offset=0)) == 2
+    assert len(store.list_memories("alice", "shared", limit=2, offset=2)) == 1
 
 
 def test_update_delete_owner_only(store):
@@ -158,7 +158,7 @@ def test_unconfirmed_media_hidden_until_confirmed(store):
     store.add(m, _vec((0, 1.0)))
     # hidden from search / list / count while unconfirmed...
     assert store.count("alice", "media") == 0
-    assert store.list("alice", "media", limit=5) == []
+    assert store.list_memories("alice", "media", limit=5) == []
     assert store.search("alice", "media", _vec((0, 1.0)), limit=5) == []
     # ...but fetchable by id (needed to confirm)
     assert store.get("alice", m.id) is not None

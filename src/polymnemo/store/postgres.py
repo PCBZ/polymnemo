@@ -166,7 +166,7 @@ class PostgresStore:
             MemoryRow.id == memory_id, MemoryRow.user_id == user_id
         )
         with Session(self._engine) as session, session.begin():
-            return session.execute(stmt).rowcount > 0
+            return session.execute(stmt).rowcount > 0  # type: ignore[attr-defined]  # DML -> CursorResult
 
     # -- reads (owner or shared namespace) ------------------------------------
     def get(self, user_id: str, memory_id: str) -> Memory | None:
@@ -207,7 +207,7 @@ class PostgresStore:
                 for row, score in session.execute(stmt)
             ]
 
-    def list(
+    def list_memories(
         self, user_id: str, namespace: str, limit: int, offset: int = 0
     ) -> list[Memory]:
         stmt = (
@@ -251,7 +251,7 @@ class PostgresStore:
             MemoryRow.user_id == user_id, MemoryRow.session_id == session_id
         )
         with Session(self._engine) as session, session.begin():
-            return session.execute(stmt).rowcount
+            return session.execute(stmt).rowcount  # type: ignore[attr-defined]  # DML -> CursorResult
 
     def replace_session(
         self,

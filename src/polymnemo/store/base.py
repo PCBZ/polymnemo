@@ -39,7 +39,7 @@ class Store(Protocol):
         """
         ...
 
-    def list(
+    def list_memories(
         self,
         user_id: str,
         namespace: str,

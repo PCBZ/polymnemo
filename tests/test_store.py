@@ -38,9 +38,9 @@ def test_list_newest_first_and_pagination():
     base = datetime(2020, 1, 1, tzinfo=UTC)
     for i, c in enumerate(["1", "2", "3"]):
         store.add(_mem(content=c, created_at=base + timedelta(seconds=i)), [0.0, 0.0])
-    page1 = store.list("alice", "shared", limit=2, offset=0)
+    page1 = store.list_memories("alice", "shared", limit=2, offset=0)
     assert [m.content for m in page1] == ["3", "2"]  # newest first
-    assert len(store.list("alice", "shared", limit=2, offset=2)) == 1
+    assert len(store.list_memories("alice", "shared", limit=2, offset=2)) == 1
 
 
 def test_shared_namespace_reads_across_users_but_writes_stay_owned():

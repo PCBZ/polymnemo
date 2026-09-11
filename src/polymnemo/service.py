@@ -124,7 +124,7 @@ class MemoryService:
         limit = settings.list_limit if limit is None else max(1, limit)
         offset = _parse_offset(cursor)
 
-        rows = self.ctx.store.list(user_id, ns, limit, offset)
+        rows = self.ctx.store.list_memories(user_id, ns, limit, offset)
         return _page(rows, self.ctx.store.count(user_id, ns), offset)
 
     def get_memory(self, user_id: str, memory_id: str) -> dict:
