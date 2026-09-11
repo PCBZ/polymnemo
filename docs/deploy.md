@@ -59,6 +59,41 @@ remote state); `concurrency` blocks overlapping runs.
 > pushes the image and goes red, then you flip the package Public and re-run the
 > `azure` job. Each run rolls a fresh revision, so the re-run picks up the change.
 
+## Failover: deploy to GCP (backup, manual only)
+
+`deploy gcp (backup)` (`.github/workflows/deploy-gcp.yml`) is a dormant failover
+to Cloud Run — `workflow_dispatch` only, never auto-triggered. It applies **only**
+the `gcp/` root and assumes the shared `neon` + `r2` (and `schema.sql`) already
+exist from the Azure deploy. Cloud Run runs the **same public GHCR image** Azure
+built — pulled directly, no Artifact Registry or Cloud Build — so it's one
+Terraform apply. It reads the shared state from Azure Storage, so it needs
+**both** GCP auth **and** the `ARM_*` secrets. It registers no MCP endpoint of its
+own: Azure's (in `server.json`) is the one canonical endpoint both clouds share.
+
+This is a **warm standby**, not automatic failover — GCP's Cloud Run URL differs
+from Azure's and is never published. What's shared automatically is the *data*
+(same Neon + R2), not the routing. So to actually fail over when Azure is down,
+you repoint the endpoint yourself: set `server.json`'s `remotes[0].url` (or the
+`mcp_endpoint` input) to the GCP URL and re-run *Publish to MCP Registry*. (A
+shared custom domain / load balancer in front of both would make this automatic —
+not set up here.)
+
+One-time setup (in addition to the Azure secrets):
+
+1. **Service account** — create a GCP SA with roles: `roles/run.admin`,
+   `roles/iam.serviceAccountAdmin` (creates the runtime SA),
+   `roles/iam.serviceAccountUser` (deploys the service *as* it), and
+   `roles/serviceusage.serviceUsageAdmin` (enables the run API). Download a JSON
+   key. (WIF / OIDC is the more secure, keyless alternative — a follow-up.)
+2. **Secrets/variables**:
+   ```bash
+   gh secret set GCP_SA_KEY < path/to/key.json       # the SA JSON key
+   gh variable set GCP_PROJECT_ID --body "<project>"
+   ```
+3. **Run it** — Actions → *deploy gcp (backup)* → Run workflow, giving an existing
+   GHCR tag (e.g. `v1.0.0`, or `latest`). It deploys Cloud Run against the same
+   shared Neon + R2 as Azure, then runs a post-deploy readiness check.
+
 The rest of this doc describes the same variables for a **local** apply.
 
 ## Variables you actually set
@@ -71,7 +106,7 @@ The rest of this doc describes the same variables for a **local** apply.
 | `cf_account_id` | r2 | Cloudflare account id (media is always on) |
 | `project_id` | gcp | GCP project id |
 | `api_keys` 🔒 | gcp | `key1:alice,key2:bob` → `POLYMNEMO_API_KEYS` |
-| `image` | gcp | Set on the **second** apply; empty on the bootstrap apply |
+| `image` | gcp | Public GHCR ref Cloud Run pulls, e.g. `ghcr.io/<owner>/polymnemo:v1.0.0` |
 
 Plus `export CLOUDFLARE_API_TOKEN=…` before applying the `r2` root (a token with
 R2 edit + API Tokens edit). **Azure path:** swap `project_id` for

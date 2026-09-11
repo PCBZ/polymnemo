@@ -10,12 +10,18 @@ variable "region" {
 
 variable "service_name" {
   type        = string
-  description = "Cloud Run service name (also the Artifact Registry repo id)."
+  description = "Cloud Run service name."
 }
 
 variable "image" {
   type        = string
-  description = "Full Artifact Registry image URI incl. tag. Empty on the bootstrap apply (the service is then skipped)."
+  description = "Full public image reference incl. tag, e.g. ghcr.io/pcbz/polymnemo:v1.0.0 (Cloud Run pulls it directly)."
+}
+
+variable "revision_suffix" {
+  type        = string
+  default     = ""
+  description = "Appended to the revision name (as <service>-<suffix>); set a per-deploy unique value (e.g. the CI run id) to force a fresh rollout even when the image ref is unchanged. Empty = Cloud Run auto-names it."
 }
 
 variable "database_url" {

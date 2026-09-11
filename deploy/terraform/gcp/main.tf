@@ -1,22 +1,29 @@
-# GCP compute: Cloud Run, reading the SHARED Neon connection string from the
-# neon root's state. Apply the neon root (and its schema.sql) first.
+# GCP compute: Cloud Run, running the SAME public GHCR image as Azure and
+# reading the SAME shared Neon + R2 state — so it's a parallel instance over the
+# same memories + media. A dormant BACKUP to the primary Azure deploy.
 #
-# Usage:
-#   1. (once) apply deploy/terraform/neon + its schema.sql
-#   2. cp terraform.tfvars.example terraform.tfvars   # project_id, region, api_keys
-#   3. terraform init && terraform apply               # bootstrap: APIs + registry
-#   4. REPO="$(terraform output -raw image_repo)"
-#      gcloud builds submit ../../../ --tag "$REPO/polymnemo:v1"
-#   5. terraform apply -var "image=$REPO/polymnemo:v1"
-#   6. terraform output -raw mcp_endpoint
-
+# Usually applied by the backup workflow (.github/workflows/deploy-gcp.yml,
+# manual only). One apply does everything — Cloud Run pulls the public image
+# directly (no Artifact Registry / Cloud Build). Manual flow, after neon/ + r2/
+# are applied (state lives in Azure Storage — pass -backend-config at init):
+#   1. cp terraform.tfvars.example terraform.tfvars   # project_id, image, api_keys, tfstate_*
+#   2. terraform init -backend-config=...key=gcp.tfstate && terraform apply
+#   3. terraform output -raw mcp_endpoint
+#
 # The shared neon/ and r2/ roots keep their state in the Azure Storage backend
 # (see neon/versions.tf), so this root reads them from there too — meaning a GCP
 # deploy needs Azure credentials (ARM_* env) just to READ the shared state. That
 # cross-cloud coupling is the deliberate cost of ONE shared Neon + R2 across both
-# clouds: the shared state has to live somewhere, and that's Azure Storage. (This
-# root keeps its OWN state local — it's a manual, secondary path with no CI.)
-# Apply neon/ and r2/ before this root.
+# clouds. Apply neon/ and r2/ before this root.
+#
+# It does NOT register its own MCP endpoint: Azure is primary, and the registered
+# endpoint (in server.json) is the single canonical one both clouds share.
+#
+# This makes GCP a WARM STANDBY, not automatic failover: GCP's Cloud Run URL
+# differs from Azure's and is never published, so if Azure is down, the canonical
+# endpoint is dead until someone manually repoints server.json to the GCP URL and
+# re-runs registry-publish (or fronts both with a shared custom domain / LB — not
+# done here). What's automatic is the shared *data* (same Neon + R2), not routing.
 data "terraform_remote_state" "neon" {
   backend = "azurerm"
   config = {
@@ -38,13 +45,14 @@ data "terraform_remote_state" "r2" {
 }
 
 module "cloud_run" {
-  source       = "../modules/cloud-run"
-  project_id   = var.project_id
-  region       = var.region
-  service_name = var.service_name
-  image        = var.image
-  database_url = data.terraform_remote_state.neon.outputs.connection_uri_pooler
-  api_keys     = var.api_keys
+  source          = "../modules/cloud-run"
+  project_id      = var.project_id
+  region          = var.region
+  service_name    = var.service_name
+  image           = var.image
+  revision_suffix = var.revision_suffix
+  database_url    = data.terraform_remote_state.neon.outputs.connection_uri_pooler
+  api_keys        = var.api_keys
 
   # Media/blob wiring — always on, from the shared r2/ root.
   blob_backend           = "s3"
@@ -52,14 +60,4 @@ module "cloud_run" {
   blob_endpoint_url      = data.terraform_remote_state.r2.outputs.endpoint_url
   blob_access_key_id     = data.terraform_remote_state.r2.outputs.access_key_id
   blob_secret_access_key = data.terraform_remote_state.r2.outputs.secret_access_key
-}
-
-# Auto-fill the deployed /mcp endpoint into a GitHub Actions variable, so the
-# registry-publish workflow can put it into server.json on release — no manual
-# copy of the URL. Only once the service exists (image set).
-resource "github_actions_variable" "mcp_endpoint" {
-  count         = var.image == "" ? 0 : 1
-  repository    = var.github_repository
-  variable_name = "MCP_ENDPOINT"
-  value         = module.cloud_run.mcp_endpoint
 }

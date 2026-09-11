@@ -1,0 +1,85 @@
+name: deploy gcp (backup)
+
+# BACKUP failover to Cloud Run — present but NEVER auto-triggered (manual only).
+# Azure Container Apps is the primary deploy (deploy.yml). This applies ONLY the
+# gcp/ root and assumes the shared neon/ + r2/ state already exists (provisioned
+# by the Azure deploy). Cloud Run runs the SAME public GHCR image Azure built, so
+# there's no image build here — one Terraform apply. It reads the shared state
+# from the Azure Storage backend, so it needs ARM_* creds in addition to GCP auth.
+# It does NOT register its own MCP endpoint (Azure's, in server.json, is the one
+# canonical endpoint both clouds share).
+on:
+  workflow_dispatch:
+    inputs:
+      image_tag:
+        description: "Existing GHCR tag to run, e.g. v1.0.0 (defaults to 'latest')."
+        required: false
+        default: "latest"
+
+concurrency: deploy-gcp
+
+permissions:
+  contents: read
+
+env:
+  # azurerm backend + shared neon/r2 state reads (state lives in Azure Storage).
+  ARM_CLIENT_ID: ${{ secrets.ARM_CLIENT_ID }}
+  ARM_CLIENT_SECRET: ${{ secrets.ARM_CLIENT_SECRET }}
+  ARM_TENANT_ID: ${{ secrets.ARM_TENANT_ID }}
+  ARM_SUBSCRIPTION_ID: ${{ secrets.ARM_SUBSCRIPTION_ID }}
+  # Terraform input variables.
+  TF_VAR_project_id: ${{ vars.GCP_PROJECT_ID }}
+  TF_VAR_api_keys: ${{ secrets.POLYMNEMO_API_KEYS }}
+  TF_VAR_tfstate_resource_group: ${{ vars.TFSTATE_RESOURCE_GROUP }}
+  TF_VAR_tfstate_storage_account: ${{ vars.TFSTATE_STORAGE_ACCOUNT }}
+  TF_VAR_tfstate_container: ${{ vars.TFSTATE_CONTAINER }}
+  TF_BACKEND: >-
+    -backend-config=resource_group_name=${{ vars.TFSTATE_RESOURCE_GROUP }}
+    -backend-config=storage_account_name=${{ vars.TFSTATE_STORAGE_ACCOUNT }}
+    -backend-config=container_name=${{ vars.TFSTATE_CONTAINER }}
+
+jobs:
+  deploy:
+    name: gcp (deploy Cloud Run)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      # Resolve the image ref via env (not straight into run:) to avoid injection
+      # from a crafted dispatch input.
+      - name: Resolve image reference
+        env:
+          TAG: ${{ inputs.image_tag }}
+          OWNER: ${{ github.repository_owner }}
+        run: echo "TF_VAR_image=ghcr.io/${OWNER,,}/polymnemo:${TAG:-latest}" >> "$GITHUB_ENV"
+      - uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.13.2"
+      - name: Terraform apply (deploy Cloud Run)
+        working-directory: deploy/terraform/gcp
+        env:
+          # A fresh revision suffix every run forces a real rollout even when the
+          # image ref is unchanged (e.g. re-running the same tag).
+          TF_VAR_revision_suffix: r${{ github.run_id }}-${{ github.run_attempt }}
+        run: |
+          terraform init $TF_BACKEND -backend-config=key=gcp.tfstate
+          terraform apply -auto-approve
+          url="$(terraform output -raw service_url)"
+          echo "MCP endpoint: ${url}/mcp"
+          # Readiness: the app runs a public image; a broken image/config would be
+          # a green-but-broken apply. Poll until the app answers (any 2xx/3xx/4xx =
+          # the container started) and fail the job loudly otherwise.
+          echo "Waiting for the app at $url to come up…"
+          for i in $(seq 1 30); do
+            code=$(curl -sS -o /dev/null -w '%{http_code}' --max-time 10 "$url") || code=000
+            echo "  [$i] HTTP $code"
+            case "$code" in
+              2??|3??|4??) echo "App is up (HTTP $code)."; exit 0 ;;
+            esac
+            sleep 10
+          done
+          echo "::error::App never responded (~5 min) — check the Cloud Run logs."
+          exit 1

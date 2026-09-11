@@ -1,19 +1,24 @@
 # Copy to terraform.tfvars and fill in. terraform.tfvars and state hold secrets —
-# both are gitignored. Apply the neon root first (this reads its state).
+# both are gitignored. Apply the neon + r2 roots first (this reads their state).
 
 project_id = "your-gcp-project-id"
 region     = "us-west1"
 api_keys   = "sk-alice-secret:alice,sk-bob-secret:bob"
 
-# Leave `image` unset for the first (bootstrap) apply; set it after build & push:
-# image = "us-west1-docker.pkg.dev/your-gcp-project-id/polymnemo/polymnemo:v1"
+# The SAME public GHCR image Azure runs — Cloud Run pulls it directly (no
+# Artifact Registry / Cloud Build). Use a tag that already exists on GHCR
+# (pushed by an Azure deploy), e.g. a release version or "latest".
+image = "ghcr.io/pcbz/polymnemo:v1.0.0"
 
 # Instance sizing lives in modules/cloud-run/variables.tf.
 
-# To auto-fill the deployed URL into the repo's MCP_ENDPOINT Actions variable
-# (for the registry-publish workflow), export a GitHub token before `apply`:
-#   export GITHUB_TOKEN=<token with repo + actions:write on PCBZ/polymnemo>
-# github_owner / github_repository default to PCBZ / polymnemo.
+# --- Remote state (Azure Storage) -------------------------------------------
+# The shared neon/ + r2/ state lives in the Azure Storage backend; this root
+# reads it from there, so pass the same coordinates at `terraform init
+# -backend-config` and set these (needs ARM_* creds to read the shared state):
+# tfstate_resource_group  = "polymnemo-tfstate-rg"
+# tfstate_storage_account = "polymnemotf..."
+# tfstate_container       = "tfstate"
 
 # --- Media (Cloudflare R2) --------------------------------------------------
 # Media is always on. Apply the shared deploy/terraform/r2 root FIRST (it owns
