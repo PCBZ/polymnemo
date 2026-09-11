@@ -1,0 +1,53 @@
+name: Retag release image (GHCR)
+
+# Point :<version> and :latest at an image that's ALREADY in GHCR — no rebuild,
+# just a registry-side retag (seconds). Use this after a release when the image
+# exists but the release tags weren't applied, e.g. a manual `deploy (azure)`
+# dispatch tagged the image by commit SHA (the dispatch/SHA path doesn't move
+# :latest — only a `v*` tag deploy does).
+#
+# The normal path still updates the package on its own: cutting a `v*` tag runs
+# deploy.yml, which builds + pushes :<version> + :latest. This workflow is the
+# on-demand fix-up for when that didn't happen.
+on:
+  workflow_dispatch:
+    inputs:
+      source:
+        description: "Existing GHCR tag to retag FROM (e.g. a commit SHA like d6b2cbb, or v1.0.1)."
+        required: true
+      version:
+        description: "Version tag to apply (e.g. v1.1.0). Also moves :latest."
+        required: true
+      update_latest:
+        description: "Also move :latest to this image."
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+  packages: write # push tags to the repo's own GHCR package
+
+jobs:
+  retag:
+    name: retag ${{ inputs.source }} -> ${{ inputs.version }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Retag (registry-side, no rebuild)
+        env:
+          SOURCE: ${{ inputs.source }}
+          VERSION: ${{ inputs.version }}
+          UPDATE_LATEST: ${{ inputs.update_latest }}
+          OWNER: ${{ github.repository_owner }}
+        run: |
+          repo="ghcr.io/${OWNER,,}/polymnemo"
+          tags=(--tag "$repo:$VERSION")
+          [ "$UPDATE_LATEST" = "true" ] && tags+=(--tag "$repo:latest")
+          # imagetools create makes new tags pointing at the SAME manifest as the
+          # source — it never pulls or rebuilds the image.
+          docker buildx imagetools create "${tags[@]}" "$repo:$SOURCE"
+          echo "Retagged $repo:$SOURCE -> :$VERSION${UPDATE_LATEST:+ + :latest}"
