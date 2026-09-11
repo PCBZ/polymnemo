@@ -245,6 +245,14 @@ def main() -> None:
         host=settings.host,
         port=settings.port,
         path=settings.mcp_path,
+        # Stateless: don't keep an in-memory transport session per connection, so
+        # any replica can serve any request. Required for horizontal scaling
+        # (Azure Container Apps / Cloud Run run multiple replicas behind a
+        # round-robin ingress with no session affinity — a stateful session would
+        # 404 when a follow-up request lands on a different replica). polymnemo's
+        # own state (memories, save_session/load_session) lives in Postgres/R2 and
+        # is addressed by explicit ids, so it doesn't need transport sessions.
+        stateless_http=True,
     )
 
 
