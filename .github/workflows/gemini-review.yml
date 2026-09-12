@@ -56,17 +56,13 @@ jobs:
         id: 'gemini_pr_review'
         env:
           GITHUB_TOKEN: '${{ steps.mint_identity_token.outputs.token || secrets.GITHUB_TOKEN || github.token }}'
-          # gh CLI (used by the model to post inline comments) reads GH_TOKEN.
-          GH_TOKEN: '${{ steps.mint_identity_token.outputs.token || secrets.GITHUB_TOKEN || github.token }}'
-          # Trust the checked-out workspace so the CLI can run `cat` / `gh`
+          # Trust the checked-out workspace so the CLI can `cat` the diff file
           # headlessly (folder-trust otherwise blocks shell tools).
           GEMINI_CLI_TRUST_WORKSPACE: 'true'
           ISSUE_TITLE: '${{ github.event.pull_request.title || github.event.issue.title }}'
           ISSUE_BODY: '${{ github.event.pull_request.body || github.event.issue.body }}'
           PULL_REQUEST_NUMBER: '${{ github.event.pull_request.number || github.event.issue.number }}'
           REPOSITORY: '${{ github.repository }}'
-          # Head commit the inline comments anchor to.
-          COMMIT_ID: '${{ github.event.pull_request.head.sha }}'
           ADDITIONAL_CONTEXT: '${{ inputs.additional_context }}'
           GEMINI_API_KEY: '${{ secrets.GEMINI_API_KEY }}'
         with:
@@ -97,39 +93,64 @@ jobs:
               },
               "tools": {
                 "core": [
-                  "run_shell_command(cat)",
-                  "run_shell_command(gh)"
+                  "run_shell_command(cat)"
                 ]
               }
             }
-          # The model reads the diff and posts its own inline review comments with
-          # gh, one per finding, tagged by a priority dot.
+          # The model can't run shell tools in CI (gemini-cli denies
+          # run_shell_command by policy in non-interactive mode), so it only
+          # READS the diff and WRITES structured JSON; the next step posts it as
+          # an inline PR review with a deterministic script.
           prompt: |-
             You are an automated code reviewer for a GitHub pull request.
 
-            1. Read the diff:  cat pr.diff
-            2. Review it against this repository's GEMINI.md standards. Ignore pure
-               formatting, filler praise, and anything CI already catches (lint,
-               type checks, tests).
-            3. For each real issue on a changed line, post an INLINE comment on
-               that exact line by running (one gh call per finding):
+            1. Read the diff by running:  cat pr.diff
+            2. Review it against this repository's GEMINI.md standards (already
+               loaded as context). Grade each finding by priority — high / medium
+               / low.
+            3. Output ONLY a single JSON object (no markdown, no code fences):
+               {
+                 "summary": "<GitHub-markdown overall review, starting with
+                   '## 🤖 Gemini review'; if nothing is worth flagging, say so>",
+                 "comments": [
+                   {
+                     "path": "<repo-relative file path, exactly as in the diff>",
+                     "line": <integer line number in the NEW version of the file —
+                       MUST be a line shown as added '+' or context ' ' in a diff
+                       hunk, never a removed '-' line>,
+                     "severity": "high|medium|low",
+                     "body": "<the specific comment for that line>"
+                   }
+                 ]
+               }
+               Put each line-specific finding in "comments", anchored to a real
+               changed/added line in the diff (empty array if none). Keep the
+               broader assessment in "summary". Do NOT post anything yourself and
+               do NOT run any commands other than `cat pr.diff`.
 
-                 gh api --method POST \
-                   "repos/$REPOSITORY/pulls/$PULL_REQUEST_NUMBER/comments" \
-                   -f commit_id="$COMMIT_ID" \
-                   -f path="<file path exactly as in the diff>" \
-                   -F line=<line number in the NEW version of the file> \
-                   -f side="RIGHT" \
-                   -f body="<dot> <your comment>"
+            Do not comment on pure formatting, do not add filler praise, and do not
+            repeat what CI already catches (lint, type checks, tests).
 
-               Begin each comment body with a priority dot:
-                 🔴 = high, 🟠 = medium, 🟡 = low.
-               The line MUST be a line shown as added '+' or context ' ' in a diff
-               hunk (never a removed '-' line), or the API will reject it.
-            4. Finally, post one short summary:
+      # Materialise the model's JSON to a file. toJSON safely escapes it into the
+      # script (no shell injection, no env var carrying the payload).
+      - name: 'Write review.json'
+        if: ${{ steps.gemini_pr_review.outputs.summary != '' }}
+        uses: 'actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b' # ratchet:actions/github-script@v7
+        with:
+          script: |
+            require('fs').writeFileSync(
+              'review.json',
+              ${{ toJSON(steps.gemini_pr_review.outputs.summary) }},
+            )
 
-                 gh pr comment "$PULL_REQUEST_NUMBER" --repo "$REPOSITORY" \
-                   --body "## 🤖 Gemini review — 🔴 <n> · 🟠 <n> · 🟡 <n>. <one-line takeaway>"
-
-            If nothing is worth flagging, skip step 3 and just post the summary
-            saying it looks good. Do not post duplicate comments.
+      # Post the findings as inline PR comments (severity dot 🔴/🟠/🟡) + a
+      # summary. PR / sha are passed as args (trusted github context); repo comes
+      # from $GITHUB_REPOSITORY, auth from $GH_TOKEN, the payload from review.json.
+      - name: 'Post inline review'
+        if: ${{ steps.gemini_pr_review.outputs.summary != '' }}
+        env:
+          GH_TOKEN: '${{ steps.mint_identity_token.outputs.token || secrets.GITHUB_TOKEN || github.token }}'
+        run: |
+          .github/scripts/post_gemini_review.sh \
+            '${{ github.event.pull_request.number || github.event.issue.number }}' \
+            '${{ github.event.pull_request.head.sha }}'
