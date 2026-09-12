@@ -3,8 +3,9 @@
 payload lands on stdout — the log line IS the measurement. Run it once per code
 state and just read (or diff) the two logs — no capture, no JSON, no CI:
 
-    TEST_DATABASE_URL=... python scripts/collect_read_payload.py > before.log  # no-defer branch
-    # check out the +defer branch (#103), same DB:
+    # on the no-defer branch:
+    TEST_DATABASE_URL=... python scripts/collect_read_payload.py > before.log
+    # on the +defer branch (#103), same DB:
     TEST_DATABASE_URL=... python scripts/collect_read_payload.py > after.log
     diff before.log after.log
 
