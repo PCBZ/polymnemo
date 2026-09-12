@@ -1,25 +1,19 @@
 name: Measure read payload
 
 # On-demand measurement for #89/#96: how many bytes the embedding column costs on
-# read paths. Runs against an ephemeral pgvector Postgres (never production),
-# then visualises the result in the run summary + uploads JSON/SVG artifacts.
+# read paths. Runs the designed sweep (content size A + result size B) against an
+# ephemeral pgvector Postgres (never production), renders a matplotlib chart +
+# a data table in the run summary, and uploads the JSON/PNG as artifacts.
 
 on:
   workflow_dispatch:
-    inputs:
-      rows:
-        description: "Number of rows to measure"
-        default: "200"
-      content_chars:
-        description: "Content chars per row"
-        default: "500"
 
 jobs:
   measure:
     runs-on: ubuntu-latest
     services:
       postgres:
-        image: pgvector/pgvector:pg16 # matches Neon's Postgres 16
+        image: pgvector/pgvector:pg17 # pg17 needed for EXPLAIN (SERIALIZE)
         env:
           POSTGRES_PASSWORD: postgres
           POSTGRES_DB: postgres
@@ -38,30 +32,26 @@ jobs:
         with:
           python-version: "3.11"
 
-      - name: Install package
-        run: pip install -e .
+      - name: Install package + matplotlib
+        run: pip install -e . matplotlib
 
       - name: Apply schema
         run: |
           sudo apt-get update && sudo apt-get install -y --no-install-recommends postgresql-client
           psql "$TEST_DATABASE_URL" -f scripts/schema.sql
 
-      - name: Measure
-        run: |
-          python scripts/measure_read_payload.py \
-            --rows "${{ inputs.rows }}" \
-            --content-chars "${{ inputs.content_chars }}" \
-            --json-out payload.json
+      - name: Sweep (content size A + result size B)
+        run: python scripts/measure_read_payload.py --sweep --json-out sweep.json
 
-      - name: Render report
+      - name: Render report (chart + table)
         run: |
-          python scripts/render_payload_report.py payload.json \
-            --svg-out payload.svg >> "$GITHUB_STEP_SUMMARY"
+          python scripts/plot_read_payload.py sweep.json \
+            --png read_payload.png >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
           name: read-payload-report
           path: |
-            payload.json
-            payload.svg
+            sweep.json
+            read_payload.png
