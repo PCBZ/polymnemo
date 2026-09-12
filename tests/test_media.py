@@ -99,6 +99,53 @@ def test_media_disabled_raises(service):
         svc.create_upload("alice", "x.png", "image/png", "desc")
 
 
+def test_create_upload_rejects_empty_content_type(service):
+    with pytest.raises(ValueError, match="content_type"):
+        service.create_upload("alice", "x.png", "  ", "a description")
+
+
+def test_forget_tolerates_blob_delete_failure(service, monkeypatch):
+    """A blob-delete failure only leaks the object — the memory is still removed."""
+    from polymnemo.blobstore.base import BlobError
+
+    r = service.create_upload("alice", "cat.png", "image/png", "a cat")
+
+    def boom(object_key):
+        raise BlobError("delete failed")
+
+    monkeypatch.setattr(service.ctx.blob_store, "delete", boom)
+    assert service.forget("alice", r["memory_id"]) == {
+        "id": r["memory_id"],
+        "deleted": True,
+    }
+    assert service.ctx.store.get("alice", r["memory_id"]) is None
+
+
+def test_confirm_upload_media_disabled_raises(service):
+    svc = MemoryService(replace(service.ctx, blob_store=None))
+    with pytest.raises(ValueError, match="blob storage is not configured"):
+        svc.confirm_upload("alice", "any-id")
+
+
+def test_confirm_upload_unknown_id_raises(service):
+    with pytest.raises(ValueError, match="no media upload"):
+        service.confirm_upload("alice", "does-not-exist")
+
+
+def test_confirm_upload_none_result_raises(service, monkeypatch):
+    """If the row vanishes between HEAD and confirm, surface a clean error."""
+    r = service.create_upload("alice", "cat.png", "image/png", "a cat")
+    monkeypatch.setattr(service.ctx.store, "confirm_media", lambda *a, **k: None)
+    with pytest.raises(ValueError, match="no media upload"):
+        service.confirm_upload("alice", r["memory_id"])
+
+
+def test_get_download_url_media_disabled_raises(service):
+    svc = MemoryService(replace(service.ctx, blob_store=None))
+    with pytest.raises(ValueError, match="blob storage is not configured"):
+        svc.get_download_url("alice", "any-id")
+
+
 def test_s3_blobstore_requires_config():
     # Validation happens before boto3 is imported, so this runs without boto3.
     from polymnemo.blobstore.base import BlobError

@@ -33,6 +33,7 @@ dev = [
     "ruff>=0.6",
     "asgi-lifespan>=2.1",  # run the ASGI app's lifespan in the transport test
     "mypy>=1.11",
+    "moto[s3]>=5",  # mock S3 so the S3BlobStore tests run offline
 ]
 
 [project.scripts]

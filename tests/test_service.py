@@ -121,6 +121,17 @@ def test_save_session_rejects_empty(service):
         service.save_session("alice", "s", "")
 
 
+def test_update_rejects_empty_content(service):
+    mid = service.remember("alice", "hello")["ids"][0]
+    with pytest.raises(ValueError, match="content is empty"):
+        service.update("alice", mid, "   ")
+
+
+def test_update_unknown_id_raises(service):
+    with pytest.raises(ValueError, match="no memory with id"):
+        service.update("alice", "does-not-exist", "hi")
+
+
 def test_failed_save_preserves_old_session(service, monkeypatch):
     service.save_session("alice", "s", "original content")
 
