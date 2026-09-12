@@ -231,7 +231,7 @@ def namespace_collection(namespace: str) -> dict:
 def main() -> None:
     """Console-script entry point: run the server over Streamable HTTP."""
     logging.basicConfig(
-        level=logging.INFO,
+        level=getattr(logging, settings.log_level.upper(), logging.INFO),
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
     )
     logger.info(
