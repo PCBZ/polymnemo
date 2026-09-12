@@ -153,8 +153,10 @@ def main() -> int:
 
     data = collect(args.dsn, args.rows, args.content_chars)
     for r in data["reads"]:
-        print(f"  {r['op']:>8}: {r['rows']} rows, embedding {r['embedding']} "
-              f"(~{r['bytes']:,} bytes)")
+        print(
+            f"  {r['op']:>8}: {r['rows']} rows, embedding {r['embedding']} "
+            f"(~{r['bytes']:,} bytes)"
+        )
     if args.out:
         with open(args.out, "w") as f:
             json.dump(data, f, indent=2)
