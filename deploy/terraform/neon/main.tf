@@ -20,6 +20,6 @@ module "neon" {
   source                    = "../modules/neon"
   name                      = var.name
   region_id                 = var.neon_region_id
-  pg_version                = 16
+  pg_version                = 17
   history_retention_seconds = var.history_retention_seconds
 }

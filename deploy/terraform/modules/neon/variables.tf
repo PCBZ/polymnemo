@@ -10,7 +10,7 @@ variable "region_id" {
 
 variable "pg_version" {
   type        = number
-  default     = 16
+  default     = 17
   description = "Postgres major version."
 }
 
