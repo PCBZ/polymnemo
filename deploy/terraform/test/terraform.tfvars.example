@@ -1,0 +1,10 @@
+# Copy to terraform.tfvars and fill in. Never commit the real file.
+neon_api_key            = "napi_..."          # same Neon account as neon/
+azure_subscription_id   = "00000000-0000-0000-0000-000000000000"
+image                   = "ghcr.io/pcbz/polymnemo:v1.1.1"  # must have POLYMNEMO_LOG_LEVEL (>= #102)
+api_keys                = "testkey:tester"
+
+# Shared Azure Storage tfstate backend (same as the other roots)
+tfstate_resource_group  = "polymnemo-tfstate-rg"
+tfstate_storage_account = "polymnemotffdd6cf4a6c774"
+tfstate_container       = "tfstate"
