@@ -230,9 +230,15 @@ def namespace_collection(namespace: str) -> dict:
 
 def main() -> None:
     """Console-script entry point: run the server over Streamable HTTP."""
+    # Root stays at INFO so third-party libs (SQLAlchemy, uvicorn, …) don't flood
+    # when we turn our own logging up; POLYMNEMO_LOG_LEVEL only moves the
+    # `polymnemo` logger (e.g. DEBUG to land the #96 read-payload observe lines).
     logging.basicConfig(
-        level=getattr(logging, settings.log_level.upper(), logging.INFO),
+        level=logging.INFO,
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+    )
+    logging.getLogger("polymnemo").setLevel(
+        getattr(logging, settings.log_level.upper(), logging.INFO)
     )
     logger.info(
         "Starting polymnemo MCP server at http://%s:%s%s",
