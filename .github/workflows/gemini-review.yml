@@ -97,31 +97,49 @@ jobs:
                 ]
               }
             }
-          # The model only READS the diff and WRITES the review text; the workflow
-          # posts it (next step) — no reliance on the model to run a post command.
+          # The model only READS the diff and WRITES structured JSON; the workflow
+          # posts it as an inline PR review (next step) — no reliance on the model
+          # to run a post command.
           prompt: |-
             You are an automated code reviewer for a GitHub pull request.
 
             1. Read the diff by running:  cat pr.diff
             2. Review it against this repository's GEMINI.md standards (already
-               loaded as context). Grade findings by severity; only Critical/High
-               are blocking; keep Medium/Low short.
-            3. Output ONLY the review as GitHub-flavored markdown, beginning with
-               "## 🤖 Gemini review". If there are no Critical/High issues, say so
-               briefly with at most a few optional Medium/Low notes. Do NOT post
-               anything yourself and do NOT run any other commands.
+               loaded as context). Grade findings by severity (Critical / High /
+               Medium / Low); only Critical/High are blocking.
+            3. Output ONLY a single JSON object (no markdown, no code fences):
+               {
+                 "summary": "<GitHub-markdown overall review, starting with
+                   '## 🤖 Gemini review'; if there are no Critical/High issues, say
+                   so briefly>",
+                 "comments": [
+                   {
+                     "path": "<repo-relative file path, exactly as in the diff>",
+                     "line": <integer line number in the NEW version of the file —
+                       it MUST be a line shown as added '+' or context ' ' in a diff
+                       hunk, never a removed '-' line>,
+                     "severity": "Critical|High|Medium|Low",
+                     "body": "<the specific comment for that line>"
+                   }
+                 ]
+               }
+               Put each line-specific finding in "comments", anchored to a real
+               changed/added line in the diff. Use an empty array if there are
+               none. Keep the broader assessment in "summary". Do NOT post anything
+               yourself and do NOT run any other commands.
 
             Do not comment on pure formatting, do not add filler praise, and do not
             repeat what CI already catches (lint, type checks, tests).
 
-      # Post the model's review text deterministically. The body is passed via env
-      # (not a ${{ }} expression inside run:) to avoid any shell injection.
-      - name: 'Post review comment'
+      # Post the model's findings deterministically as a PR review with inline
+      # line comments. The JSON is passed via env (not a ${{ }} expression inside
+      # run:) to avoid any shell injection; the script anchors each comment to a
+      # real diff line and falls back to a summary-only review if anchoring fails.
+      - name: 'Post inline review'
         if: ${{ steps.gemini_pr_review.outputs.summary != '' }}
         env:
           GH_TOKEN: '${{ steps.mint_identity_token.outputs.token || secrets.GITHUB_TOKEN || github.token }}'
-          REVIEW_BODY: '${{ steps.gemini_pr_review.outputs.summary }}'
-        run: |-
-          printf '%s' "$REVIEW_BODY" > review.md
-          gh pr comment '${{ github.event.pull_request.number || github.event.issue.number }}' \
-            --repo '${{ github.repository }}' --body-file review.md
+          REVIEW_JSON: '${{ steps.gemini_pr_review.outputs.summary }}'
+          PR: '${{ github.event.pull_request.number || github.event.issue.number }}'
+          REPO: '${{ github.repository }}'
+        run: python3 .github/scripts/post_gemini_review.py
