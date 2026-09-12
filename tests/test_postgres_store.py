@@ -182,3 +182,26 @@ def test_shared_vs_private(store):
     assert store.count("bob", "diary") == 0
     # writes stay owner-only, even in a shared namespace
     assert store.update("bob", shared.id, "x", _vec((0, 1.0))) is None
+
+
+def test_reads_defer_embedding_column(store):
+    """#89: read paths must not SELECT the 384-dim embedding column."""
+    from sqlalchemy import event
+
+    mid = store.add(_mem(content="hello"), _vec((0, 1.0)))
+
+    selects: list[str] = []
+
+    def _capture(conn, cursor, statement, parameters, context, executemany):
+        if statement.lstrip().upper().startswith("SELECT"):
+            selects.append(statement)
+
+    event.listen(store._engine, "before_cursor_execute", _capture)
+    try:
+        assert store.get("alice", mid) is not None
+        store.list_memories("alice", "shared", limit=10)
+    finally:
+        event.remove(store._engine, "before_cursor_execute", _capture)
+
+    assert selects  # sanity: the read queries were captured
+    assert all("embedding" not in s.lower() for s in selects), selects

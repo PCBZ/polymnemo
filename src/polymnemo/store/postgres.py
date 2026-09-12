@@ -19,7 +19,7 @@ from datetime import datetime
 
 from pgvector.sqlalchemy import Vector
 from sqlalchemy import ARRAY, Text, create_engine, delete, func, or_, select, update
-from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column
+from sqlalchemy.orm import DeclarativeBase, Mapped, Session, defer, mapped_column
 
 from ..config import settings
 from ..models import Memory
@@ -170,8 +170,10 @@ class PostgresStore:
 
     # -- reads (owner or shared namespace) ------------------------------------
     def get(self, user_id: str, memory_id: str) -> Memory | None:
-        stmt = select(MemoryRow).where(
-            MemoryRow.id == memory_id, self._visible(user_id)
+        stmt = (
+            select(MemoryRow)
+            .options(defer(MemoryRow.embedding))  # reads never need the vector
+            .where(MemoryRow.id == memory_id, self._visible(user_id))
         )
         with Session(self._engine) as session:
             row = session.execute(stmt).scalar_one_or_none()
@@ -192,6 +194,8 @@ class PostgresStore:
         distance = MemoryRow.embedding.cosine_distance(list(embedding))
         stmt = (
             select(MemoryRow, (1 - distance).label("score"))
+            # distance is computed server-side; don't ship each row's vector back.
+            .options(defer(MemoryRow.embedding))
             .where(
                 MemoryRow.namespace == namespace,
                 self._visible(user_id),
@@ -212,6 +216,7 @@ class PostgresStore:
     ) -> list[Memory]:
         stmt = (
             select(MemoryRow)
+            .options(defer(MemoryRow.embedding))
             .where(
                 MemoryRow.namespace == namespace,
                 self._visible(user_id),
@@ -240,6 +245,7 @@ class PostgresStore:
     def get_session(self, user_id: str, session_id: str) -> list[Memory]:
         stmt = (
             select(MemoryRow)
+            .options(defer(MemoryRow.embedding))
             .where(MemoryRow.user_id == user_id, MemoryRow.session_id == session_id)
             .order_by(MemoryRow.seq)
         )
