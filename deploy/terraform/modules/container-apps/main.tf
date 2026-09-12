@@ -90,6 +90,10 @@ resource "azurerm_container_app" "this" {
         value = "8080"
       }
       env {
+        name  = "POLYMNEMO_LOG_LEVEL"
+        value = var.log_level
+      }
+      env {
         name        = "POLYMNEMO_DATABASE_URL"
         secret_name = "database-url"
       }

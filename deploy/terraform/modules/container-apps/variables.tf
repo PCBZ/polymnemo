@@ -36,6 +36,12 @@ variable "api_keys" {
   description = "Per-user keys \"key1:alice,key2:bob\", injected as POLYMNEMO_API_KEYS."
 }
 
+variable "log_level" {
+  type        = string
+  default     = "INFO"
+  description = "Root log level, injected as POLYMNEMO_LOG_LEVEL. Set DEBUG on a test env to land the #96 read-payload observe lines in Log Analytics."
+}
+
 # --- Media / blob storage (R2). "none" leaves the media tools off. ------------
 variable "blob_backend" {
   type        = string
