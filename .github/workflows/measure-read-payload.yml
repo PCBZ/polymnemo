@@ -1,12 +1,26 @@
 name: Measure read payload
 
-# On-demand measurement for #89/#96: how many bytes the embedding column costs on
-# read paths. Runs the designed sweep (content size A + result size B) against an
-# ephemeral pgvector Postgres (never production), renders a matplotlib chart +
-# a data table in the run summary, and uploads the JSON/PNG as artifacts.
+# On-demand REAL before/after measurement for #89: how many bytes the embedding
+# column costs on the actual PostgresStore read paths. Runs the same harness
+# twice against one ephemeral pg17 pgvector (never production) — once with the
+# baseline store code (before_ref, no defer) and once with the optimized code
+# (after_ref, #89 defer) — then renders the per-read comparison chart + table.
 
 on:
   workflow_dispatch:
+    inputs:
+      before_ref:
+        description: "Git ref for the baseline store (no defer)"
+        default: "main"
+      after_ref:
+        description: "Git ref for the optimized store (#89 defer)"
+        default: "feat/defer-embedding-reads"
+      rows:
+        description: "Rows to seed"
+        default: "50"
+      content_chars:
+        description: "Content chars per row"
+        default: "500"
 
 jobs:
   measure:
@@ -26,11 +40,18 @@ jobs:
           --health-retries 10
     env:
       TEST_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/postgres
+      STORE: src/polymnemo/store/postgres.py
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # need before_ref/after_ref to overlay the store file
+
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
+
+      - name: Fetch before/after refs
+        run: git fetch --no-tags origin "${{ inputs.before_ref }}" "${{ inputs.after_ref }}"
 
       - name: Install package + matplotlib
         run: pip install -e . matplotlib
@@ -40,18 +61,32 @@ jobs:
           sudo apt-get update && sudo apt-get install -y --no-install-recommends postgresql-client
           psql "$TEST_DATABASE_URL" -f scripts/schema.sql
 
-      - name: Sweep (content size A + result size B)
-        run: python scripts/measure_read_payload.py --sweep --json-out sweep.json
-
-      - name: Render report (chart + table)
+      # The harness is constant; only the store file is swapped to each ref, so
+      # the ONLY difference between the two runs is #89's defer.
+      - name: Measure BEFORE (baseline, no defer)
         run: |
-          python scripts/plot_read_payload.py sweep.json \
-            --png read_payload.png >> "$GITHUB_STEP_SUMMARY"
+          git show "origin/${{ inputs.before_ref }}:$STORE" > "$STORE"
+          python scripts/measure_read_payload.py \
+            --rows "${{ inputs.rows }}" --content-chars "${{ inputs.content_chars }}" \
+            --json-out before.json
+
+      - name: Measure AFTER (#89 defer)
+        run: |
+          git show "origin/${{ inputs.after_ref }}:$STORE" > "$STORE"
+          python scripts/measure_read_payload.py \
+            --rows "${{ inputs.rows }}" --content-chars "${{ inputs.content_chars }}" \
+            --json-out after.json
+
+      - name: Compare (chart + table)
+        run: |
+          python scripts/plot_read_payload.py before.json after.json \
+            --png read_payload_compare.png >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: read-payload-report
+          name: read-payload-compare
           path: |
-            sweep.json
-            read_payload.png
+            before.json
+            after.json
+            read_payload_compare.png

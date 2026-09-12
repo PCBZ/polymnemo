@@ -1,30 +1,27 @@
 #!/usr/bin/env python
-"""Measure the read payload the embedding column costs (#89 / #96).
+"""Measure the read payload of the REAL PostgresStore read methods (#89 / #96).
 
-Everything runs inside ONE transaction that is ROLLED BACK, so it never
-persists data — safe to point at any throwaway pgvector Postgres. Do NOT point
-it at production. It reports, in real bytes measured on a real database:
+This drives the actual store methods — ``get`` / ``search`` / ``list_memories`` /
+``get_session`` — at their real default limits, captures the exact SQL each one
+emits, and measures the bytes Postgres serialises to send back with PG17's
+``EXPLAIN (ANALYZE, SERIALIZE)`` (text + binary wire formats). It also reports
+server-side storage via ``pg_column_size``.
 
-  * server storage  — pg_column_size(embedding) vs the whole row
-  * client transfer — EXPLAIN (ANALYZE, SERIALIZE) of SELECT * vs
-    SELECT <cols - embedding>, in both wire formats (text + binary)
+It measures whatever the checked-out store code does: run it on the no-defer
+code (before #89) for the baseline, and on the defer code (after #89) for the
+optimized number, then compare the two JSONs with plot_read_payload.py. The
+JSON self-labels which state it measured via ``meta.reads_fetch_embedding``.
 
-Transfer is measured with Postgres 17's EXPLAIN (SERIALIZE): Postgres itself
-reports the exact volume it serialises to send to the client — authoritative,
-not a str() proxy — so this needs a pg17 server. (Production Neon can stay on
-pg16; the embedding's share of the payload is version-independent.)
+Needs a real pg17 + pgvector server (EXPLAIN SERIALIZE is PG17). Point it at a
+THROWAWAY database — it inserts synthetic rows (committed, so the store's own
+sessions can read them) and deletes them afterwards. NEVER production.
 
-Run it against a local/ephemeral pgvector on pg17:
-
-  docker run --rm -d --name pmtest -e POSTGRES_PASSWORD=pm \\
-    -p 5433:5432 pgvector/pgvector:pg17
-  psql postgresql://postgres:pm@localhost:5433/postgres -f scripts/schema.sql
-  TEST_DATABASE_URL=postgresql://postgres:pm@localhost:5433/postgres \\
-    python scripts/measure_read_payload.py --rows 200
-  docker stop pmtest        # --rm -> auto-removed
-
-The measure-read-payload workflow does exactly this in CI-on-demand and
-visualises the JSON (see .github/workflows/measure-read-payload.yml).
+    docker run --rm -d --name pmtest -e POSTGRES_PASSWORD=pm \\
+      -p 5433:5432 pgvector/pgvector:pg17
+    psql postgresql://postgres:pm@localhost:5433/postgres -f scripts/schema.sql
+    TEST_DATABASE_URL=postgresql://postgres:pm@localhost:5433/postgres \\
+      python scripts/measure_read_payload.py --json-out run.json
+    docker stop pmtest
 """
 
 from __future__ import annotations
@@ -35,58 +32,94 @@ import os
 import random
 import sys
 
-from sqlalchemy import create_engine, text
+from sqlalchemy import delete, event, text
 from sqlalchemy.orm import Session
 
 from polymnemo.config import settings
 from polymnemo.models import new_id
-from polymnemo.store.postgres import MemoryRow, _sqlalchemy_url
+from polymnemo.store.postgres import MemoryRow, PostgresStore
+
+USER = "measure"
 
 
-def _serialize_bytes(session, select_sql: str, ns: str, fmt: str) -> int:
+def _serialize_bytes(conn, sql: str, params, fmt: str) -> int:
     """Bytes Postgres serialises to send this query's result to the client.
 
-    PG17's ``EXPLAIN (ANALYZE, SERIALIZE <fmt>)`` runs the query and reports the
-    serialised output volume (``Output Volume``, in kB) for the given wire format
-    (``text`` or ``binary``) — the authoritative transfer size, not a proxy.
+    PG17 ``EXPLAIN (ANALYZE, SERIALIZE <fmt>)`` runs the query and reports the
+    serialised ``Output Volume`` (in kB) for the given wire format.
     """
-    raw = session.execute(
-        text(
-            f"EXPLAIN (ANALYZE, SERIALIZE {fmt}, FORMAT JSON) "
-            f"{select_sql} WHERE namespace = :ns"
-        ),
-        {"ns": ns},
+    raw = conn.exec_driver_sql(
+        f"EXPLAIN (ANALYZE, SERIALIZE {fmt}, FORMAT JSON) {sql}", params
     ).scalar()
     plan = raw if isinstance(raw, (list, dict)) else json.loads(raw)
     return int(plan[0]["Serialization"]["Output Volume"]) * 1024  # kB -> bytes
 
 
 def measure(dsn: str, rows: int, content_chars: int) -> dict:
-    """Insert `rows` synthetic memories, measure the read payload, roll back."""
+    """Drive the real store reads and measure the payload each one transfers."""
     dim = settings.embed_dim
     rng = random.Random(0)
-    engine = create_engine(
-        _sqlalchemy_url(dsn), connect_args={"prepare_threshold": None}
-    )
+    store = PostgresStore(dsn, shared_namespaces=["shared"])
     ns = f"_measure_{new_id()}"
+    sess = f"_sess_{new_id()}"
     content = "x" * content_chars
-    try:
-        with Session(engine) as session:
-            session.add_all(
-                MemoryRow(
-                    id=new_id(),
-                    user_id="measure",
-                    namespace=ns,
-                    content=content,
-                    embedding=[rng.uniform(-1, 1) for _ in range(dim)],
-                    confirmed=True,
-                )
-                for _ in range(rows)
-            )
-            session.flush()  # visible inside the tx; never committed
+    ids: list[str] = []
 
-            # -- server-side storage bytes (authoritative — Postgres itself) ---
-            srow = session.execute(
+    try:
+        # Commit synthetic rows so the store's own (separate) sessions see them.
+        with Session(store._engine) as s, s.begin():
+            for i in range(rows):
+                mid = new_id()
+                ids.append(mid)
+                s.add(
+                    MemoryRow(
+                        id=mid,
+                        user_id=USER,
+                        namespace=ns,
+                        content=content,
+                        embedding=[rng.uniform(-1, 1) for _ in range(dim)],
+                        session_id=sess,
+                        seq=i,
+                        confirmed=True,
+                    )
+                )
+
+        qvec = [rng.uniform(-1, 1) for _ in range(dim)]
+        ops = {
+            "get": lambda: store.get(USER, ids[0]),
+            "recall": lambda: store.search(USER, ns, qvec, limit=settings.recall_limit),
+            "list": lambda: store.list_memories(USER, ns, limit=settings.list_limit),
+            "session": lambda: store.get_session(USER, sess),
+        }
+
+        # Capture the exact SELECT each real read method emits.
+        captured: dict[str, tuple[str, object]] = {}
+        current: str | None = None
+
+        def _cap(conn, cursor, statement, parameters, context, executemany):
+            if current and statement.lstrip().upper().startswith("SELECT"):
+                captured.setdefault(current, (statement, parameters))
+
+        event.listen(store._engine, "before_cursor_execute", _cap)
+        try:
+            for name, fn in ops.items():
+                current = name
+                fn()
+                current = None
+        finally:
+            event.remove(store._engine, "before_cursor_execute", _cap)
+
+        # EXPLAIN SERIALIZE each captured read, both wire formats.
+        reads: dict[str, dict[str, int]] = {}
+        with store._engine.connect() as conn:
+            for op, (sql, params) in captured.items():
+                reads[op] = {
+                    fmt: _serialize_bytes(conn, sql, params, fmt)
+                    for fmt in ("text", "binary")
+                }
+
+            # Server-side storage (pg_column_size), authoritative.
+            srow = conn.execute(
                 text(
                     "SELECT sum(pg_column_size(embedding)) AS e, "
                     "sum(pg_column_size(t.*)) AS tot, count(*) AS n "
@@ -96,31 +129,26 @@ def measure(dsn: str, rows: int, content_chars: int) -> dict:
             ).one()
             embed_store, row_store, n = int(srow.e), int(srow.tot), int(srow.n)
 
-            # -- client transfer bytes (PG17 EXPLAIN SERIALIZE, both formats) --
-            names = [c.name for c in MemoryRow.__table__.c]
-            no_embed = ", ".join(c for c in names if c != "embedding")
-            sel_with = "SELECT * FROM memories"
-            sel_without = f"SELECT {no_embed} FROM memories"
-
-            wire = {}
-            for fmt in ("text", "binary"):
-                w = _serialize_bytes(session, sel_with, ns, fmt)
-                o = _serialize_bytes(session, sel_without, ns, fmt)
-                wire[fmt] = {
-                    "with_embedding_bytes": w,
-                    "without_embedding_bytes": o,
-                    "saved_bytes": w - o,
-                    "saved_pct": round((w - o) / w * 100, 1) if w else 0.0,
-                }
-
-            session.rollback()  # nothing persists
+        reads_fetch_embedding = any(
+            "embedding" in sql.lower() for sql, _ in captured.values()
+        )
     finally:
-        engine.dispose()
+        # Ephemeral DB, but tidy up our namespace regardless.
+        with Session(store._engine) as s, s.begin():
+            s.execute(delete(MemoryRow).where(MemoryRow.namespace == ns))
+        store.close()
 
     return {
-        "rows": n,
-        "content_chars": content_chars,
-        "dim": dim,
+        "meta": {
+            "dim": dim,
+            "rows": rows,
+            "content_chars": content_chars,
+            "recall_limit": settings.recall_limit,
+            "list_limit": settings.list_limit,
+            # True on the pre-#89 (no-defer) code, False once reads defer it.
+            "reads_fetch_embedding": reads_fetch_embedding,
+        },
+        "reads": reads,
         "storage": {
             "embedding_bytes": embed_store,
             "row_bytes": row_store,
@@ -128,102 +156,53 @@ def measure(dsn: str, rows: int, content_chars: int) -> dict:
             "per_row_embedding": round(embed_store / n),
             "per_row_total": round(row_store / n),
         },
-        # text is the primary/headline wire format (EXPLAIN's default); binary is
-        # reported alongside since pgvector/psycopg can negotiate it.
-        "wire": {**wire["text"], "format": "text"},
-        "wire_binary": {**wire["binary"], "format": "binary"},
     }
 
 
-# Designed test-case matrix (#96), anchored to real config: chunk_tokens=120
-# (a ~500-char typical chunk), recall_limit=8, list_limit=20, embed_dim=384.
-# Each sweep varies ONE axis so the result is a trend, not a single point.
-CONTENT_SWEEP = (40, 120, 500, 1000, 2000)  # A: content chars/row (media→long)
-ROWS_SWEEP = (1, 8, 20, 100, 1000)  # B: rows returned (get / recall / list / …)
-A_ROWS = 20  # fix rows at list_limit while sweeping content
-B_CONTENT = 500  # fix content at a typical chunk while sweeping rows
-
-
-def sweep(dsn: str, a_rows: int = A_ROWS, b_content: int = B_CONTENT) -> dict:
-    """Run the #96 test-case matrix: sweep content size (A) and row count (B)."""
-    return {
-        "meta": {
-            "dim": settings.embed_dim,
-            "a_rows": a_rows,
-            "b_content": b_content,
-            "recall_limit": 8,
-            "list_limit": 20,
-        },
-        "content_sweep": [measure(dsn, a_rows, c) for c in CONTENT_SWEEP],
-        "rows_sweep": [measure(dsn, r, b_content) for r in ROWS_SWEEP],
-    }
-
-
-def _print_sweep(sw: dict) -> None:
-    print(f"\nSweep A — transfer vs content (rows={sw['meta']['a_rows']}):")
-    for m in sw["content_sweep"]:
-        print(f"  {m['content_chars']:>5}-char: saved {m['wire']['saved_pct']}%")
-    print(f"\nSweep B — transfer vs rows (content={sw['meta']['b_content']}):")
-    for m in sw["rows_sweep"]:
-        print(f"  {m['rows']:>5} rows: saved {m['wire']['saved_bytes']:,} B")
-    print()
-
-
-def _print_table(m: dict) -> None:
-    s, w = m["storage"], m["wire"]
-    print(
-        f"\nRead-payload measurement — {m['rows']} rows, {m['dim']}-dim, "
-        f"{m['content_chars']}-char content\n"
-    )
-    print("Server storage (pg_column_size):")
-    print(
-        f"  embedding column : {s['embedding_bytes']:>12,} B  "
-        f"({s['embedding_pct']}% of row, {s['per_row_embedding']:,} B/row)"
+def _print(m: dict) -> None:
+    state = (
+        "fetches embedding"
+        if m["meta"]["reads_fetch_embedding"]
+        else "defers embedding"
     )
     print(
-        f"  whole row        : {s['row_bytes']:>12,} B  "
-        f"({s['per_row_total']:,} B/row)"
+        f"\nRead payload — {m['meta']['rows']} rows, {m['meta']['dim']}-dim, "
+        f"{m['meta']['content_chars']}-char content · reads {state}\n"
     )
-    print("\nClient transfer (SELECT with vs without embedding):")
-    print(f"  with embedding   : {w['with_embedding_bytes']:>12,} B")
-    print(f"  without embedding: {w['without_embedding_bytes']:>12,} B")
-    print(f"  saved            : {w['saved_bytes']:>12,} B  ({w['saved_pct']}%)\n")
+    print("Per-read transfer (EXPLAIN SERIALIZE, text / binary):")
+    for op, w in m["reads"].items():
+        print(f"  {op:>8}: {w['text']:>10,} B text · {w['binary']:>10,} B binary")
+    s = m["storage"]
+    print(
+        f"\nStorage: embedding {s['embedding_bytes']:,} B "
+        f"({s['embedding_pct']}% of row)\n"
+    )
 
 
 def main() -> int:
-    ap = argparse.ArgumentParser(description="Measure read payload (#89/#96)")
+    ap = argparse.ArgumentParser(description="Measure real read payload (#89/#96)")
     ap.add_argument(
         "--dsn",
         default=os.getenv("TEST_DATABASE_URL") or os.getenv("DATABASE_URL"),
-        help="pgvector DSN (defaults to $TEST_DATABASE_URL). Use a throwaway DB.",
+        help="pg17 pgvector DSN (defaults to $TEST_DATABASE_URL). Use a throwaway DB.",
     )
-    ap.add_argument("--rows", type=int, default=200)
+    ap.add_argument("--rows", type=int, default=50)
     ap.add_argument("--content-chars", type=int, default=500)
-    ap.add_argument(
-        "--sweep",
-        action="store_true",
-        help="run the #96 test-case matrix (content + rows sweeps) instead of "
-        "a single measurement",
-    )
-    ap.add_argument("--json-out", help="also write the result JSON to this path")
+    ap.add_argument("--json-out", help="write the result JSON to this path")
     args = ap.parse_args()
     if not args.dsn:
         print(
             "error: set TEST_DATABASE_URL or pass --dsn "
-            "(a throwaway pgvector DB, NOT production)",
+            "(a throwaway pg17 pgvector DB, NOT production)",
             file=sys.stderr,
         )
         return 2
 
-    result = (
-        sweep(args.dsn)
-        if args.sweep
-        else measure(args.dsn, args.rows, args.content_chars)
-    )
-    (_print_sweep if args.sweep else _print_table)(result)
+    m = measure(args.dsn, args.rows, args.content_chars)
+    _print(m)
     if args.json_out:
         with open(args.json_out, "w") as f:
-            json.dump(result, f, indent=2)
+            json.dump(m, f, indent=2)
         print(f"wrote {args.json_out}")
     return 0
 

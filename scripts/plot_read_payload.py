@@ -1,18 +1,12 @@
 #!/usr/bin/env python
-"""Plot the #96 sweep JSON (from measure_read_payload.py --sweep) as a matplotlib
-figure, plus a Markdown data table for the run summary.
+"""Compare two measure_read_payload.py runs — before (no defer) vs after (defer)
+— and render the saving per read method (#89 / #96).
 
-Two panels, one per designed sweep:
-  A  read transfer vs content size   (rows fixed at list_limit)
-  B  read transfer vs result size    (content fixed at a typical chunk)
+    python scripts/plot_read_payload.py before.json after.json --png compare.png
 
-Each panel plots per-read wire bytes WITH vs WITHOUT the embedding column on a
-single log axis (never a dual axis) — the gap between the two lines is exactly
-what deferring the embedding (#89) saves. Colours come from the validated
-categorical palette: orange = embedding fetched (the cost), blue = deferred (#89).
-
-    pip install matplotlib
-    python scripts/plot_read_payload.py sweep.json --png read_payload.png
+Prints a Markdown table (for the run summary) and, with --png, a grouped bar
+chart: per read op, before vs after transfer bytes, on a single log axis.
+Colours: orange = before (fetches embedding), blue = after (defers it, #89).
 """
 
 from __future__ import annotations
@@ -22,167 +16,153 @@ import json
 
 import matplotlib
 
-matplotlib.use("Agg")  # headless: render to file, no display
+matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
-WITH = "#eb6834"  # cost — embedding fetched
-WITHOUT = "#2a78d6"  # win — embedding deferred (#89)
+BEFORE = "#eb6834"  # fetches embedding
+AFTER = "#2a78d6"  # defers embedding (#89)
 INK = "#1a1a19"
 MUTED = "#6b6a63"
 GRID = "#e4e3de"
 
+OPS = ["get", "recall", "list", "session"]
+
 
 def _kb(n: int) -> str:
-    return f"{n / 1024:.0f} KB" if n < 1024 * 1024 else f"{n / 1024 / 1024:.1f} MB"
+    return f"{n / 1024:.1f} KB" if n < 1024 * 1024 else f"{n / 1024 / 1024:.2f} MB"
 
 
-def _panel(
-    ax,
-    points,
-    xkey,
-    xlabel,
-    title,
-    *,
-    annotate_pct_at=None,
-    marks=None,
-    legend_loc="upper left",
-):
-    xs = [p[xkey] for p in points]
-    yw = [p["wire"]["with_embedding_bytes"] for p in points]
-    yo = [p["wire"]["without_embedding_bytes"] for p in points]
+def _fmt_bytes(before: dict, after: dict, wire: str) -> list[dict]:
+    rows = []
+    for op in OPS:
+        if op not in before["reads"] or op not in after["reads"]:
+            continue
+        b = before["reads"][op][wire]
+        a = after["reads"][op][wire]
+        rows.append(
+            {
+                "op": op,
+                "before": b,
+                "after": a,
+                "saved": b - a,
+                "pct": round((b - a) / b * 100, 1) if b else 0.0,
+            }
+        )
+    return rows
 
-    ax.plot(xs, yw, marker="o", ms=7, lw=2, color=WITH, label="with embedding")
-    ax.plot(
-        xs, yo, marker="o", ms=7, lw=2, color=WITHOUT, label="without embedding (#89)"
+
+def markdown(before: dict, after: dict) -> str:
+    meta = after["meta"]
+    assert before["meta"]["reads_fetch_embedding"], "before run must fetch embedding"
+    assert not meta["reads_fetch_embedding"], "after run must defer embedding"
+    out = [
+        f"## Read-payload: before vs after #89 — {meta['dim']}-dim embedding",
+        "",
+        f"_real `PostgresStore` reads on pg17; {meta['rows']} rows, "
+        f"{meta['content_chars']}-char content; recall_limit={meta['recall_limit']}, "
+        f"list_limit={meta['list_limit']}. Transfer via EXPLAIN (SERIALIZE)._",
+    ]
+    for wire in ("text", "binary"):
+        out += [
+            "",
+            f"### {wire} wire format",
+            "",
+            "| read | before (fetch) | after (#89 defer) | saved |",
+            "|---|--:|--:|--:|",
+        ]
+        for r in _fmt_bytes(before, after, wire):
+            out.append(
+                f"| `{r['op']}` | {_kb(r['before'])} | {_kb(r['after'])} | "
+                f"{_kb(r['saved'])} ({r['pct']:.0f}%) |"
+            )
+    s_a = after["storage"]
+    out += [
+        "",
+        "### Server storage (`pg_column_size`, same on both)",
+        "",
+        f"Embedding is **{s_a['embedding_pct']}%** of a stored row "
+        f"({s_a['per_row_embedding']:,} B/row of {s_a['per_row_total']:,} B).",
+        "",
+    ]
+    return "\n".join(out)
+
+
+def figure(before: dict, after: dict, wire: str = "text"):
+    data = _fmt_bytes(before, after, wire)
+    ops = [r["op"] for r in data]
+    x = range(len(ops))
+    w = 0.38
+
+    fig, ax = plt.subplots(figsize=(8, 4.6))
+    fig.patch.set_facecolor("white")
+    ax.bar(
+        [i - w / 2 for i in x],
+        [r["before"] for r in data],
+        w,
+        color=BEFORE,
+        label="before (fetches embedding)",
     )
-    ax.set_xscale("log")
+    ax.bar(
+        [i + w / 2 for i in x],
+        [r["after"] for r in data],
+        w,
+        color=AFTER,
+        label="after (#89 defers embedding)",
+    )
     ax.set_yscale("log")
-    ax.set_xlabel(xlabel, color=MUTED, fontsize=10)
-    ax.set_ylabel("bytes per read (log)", color=MUTED, fontsize=10)
-    ax.set_title(title, color=INK, fontsize=12, fontweight="600", pad=10)
-    ax.set_xticks(xs)
-    ax.set_xticklabels([f"{x:,}" for x in xs], fontsize=9)
-    ax.grid(True, which="major", color=GRID, lw=0.8)
+    ax.set_ylabel("bytes transferred per read (log)", color=MUTED, fontsize=10)
+    ax.set_xticks(list(x))
+    ax.set_xticklabels(ops, fontsize=10)
+    ax.set_title(
+        f"Read payload before vs after #89 ({wire} wire, "
+        f"{after['meta']['dim']}-dim embedding)",
+        color=INK,
+        fontsize=12,
+        fontweight="600",
+        pad=10,
+    )
+    ax.grid(True, axis="y", color=GRID, lw=0.8)
     ax.tick_params(colors=MUTED)
     for spine in ("top", "right"):
         ax.spines[spine].set_visible(False)
     for spine in ("left", "bottom"):
         ax.spines[spine].set_color(GRID)
-
-    # Selective direct label: the saved % at one representative point.
-    if annotate_pct_at is not None:
-        p = next(p for p in points if p[xkey] == annotate_pct_at)
-        ax.annotate(
-            f"saved {p['wire']['saved_pct']:.0f}%",
-            xy=(p[xkey], p["wire"]["without_embedding_bytes"]),
-            xytext=(0, -28),
-            textcoords="offset points",
+    # Saved % above each pair.
+    for i, r in zip(x, data, strict=False):
+        top = max(r["before"], r["after"])
+        ax.text(
+            i,
+            top * 1.15,
+            f"-{r['pct']:.0f}%",
             ha="center",
-            fontsize=10,
+            fontsize=9,
             fontweight="600",
-            color=WITHOUT,
+            color=AFTER,
         )
-
-    # Real operating points (get / recall / list) as recessive guides.
-    if marks:
-        top = max(yw)
-        for x, label in marks:
-            ax.axvline(x, color=GRID, lw=1, ls=":", zorder=0)
-            ax.text(x, top * 1.25, label, ha="center", fontsize=8, color=MUTED)
-
-    ax.legend(frameon=False, fontsize=9, loc=legend_loc)
-
-
-def figure(sw: dict):
-    meta = sw["meta"]
-    fig, (axa, axb) = plt.subplots(1, 2, figsize=(11, 4.6))
-    fig.patch.set_facecolor("white")
-
-    _panel(
-        axa,
-        sw["content_sweep"],
-        "content_chars",
-        "content chars per row",
-        f"A · transfer vs content size (rows={meta['a_rows']})",
-        annotate_pct_at=500,
-    )
-    _panel(
-        axb,
-        sw["rows_sweep"],
-        "rows",
-        "rows returned per read",
-        f"B · transfer vs result size (content={meta['b_content']} chars)",
-        marks=[
-            (1, "get"),
-            (meta["recall_limit"], "recall"),
-            (meta["list_limit"], "list"),
-        ],
-        legend_loc="lower right",
-    )
-    fig.suptitle(
-        f"Read payload: what the {meta['dim']}-dim embedding column costs "
-        "(EXPLAIN SERIALIZE, text wire format)",
-        fontsize=13,
-        fontweight="700",
-        color=INK,
-    )
-    fig.tight_layout(rect=(0, 0, 1, 0.95))
+    ax.legend(frameon=False, fontsize=9, loc="upper left")
+    ax.margins(y=0.2)
+    fig.tight_layout()
     return fig
 
 
-def markdown(sw: dict) -> str:
-    meta = sw["meta"]
-    lines = [
-        f"## Read-payload sweeps — {meta['dim']}-dim embedding, real pgvector",
-        "",
-        "_transfer measured with PG17 `EXPLAIN (SERIALIZE)`; text is the "
-        "headline wire format, binary shown for reference._",
-        "",
-        f"### A · transfer vs content size (rows = {meta['a_rows']})",
-        "",
-        "| content chars | with embedding | without (#89) "
-        "| saved (text) | saved (binary) |",
-        "|--:|--:|--:|--:|--:|",
-    ]
-    for m in sw["content_sweep"]:
-        w, b = m["wire"], m["wire_binary"]
-        lines.append(
-            f"| {m['content_chars']:,} | {_kb(w['with_embedding_bytes'])} | "
-            f"{_kb(w['without_embedding_bytes'])} | {w['saved_pct']:.0f}% | "
-            f"{b['saved_pct']:.0f}% |"
-        )
-    lines += [
-        "",
-        f"### B · transfer vs result size (content = {meta['b_content']} chars)",
-        "",
-        "| rows | with embedding | without (#89) "
-        "| saved (text) | saved (binary) |",
-        "|--:|--:|--:|--:|--:|",
-    ]
-    for m in sw["rows_sweep"]:
-        w, b = m["wire"], m["wire_binary"]
-        lines.append(
-            f"| {m['rows']:,} | {_kb(w['with_embedding_bytes'])} | "
-            f"{_kb(w['without_embedding_bytes'])} | {_kb(w['saved_bytes'])} | "
-            f"{b['saved_pct']:.0f}% |"
-        )
-    lines.append("")
-    return "\n".join(lines)
-
-
 def main() -> int:
-    ap = argparse.ArgumentParser(description="Plot #96 sweep JSON")
-    ap.add_argument("json_path", help="sweep JSON from measure_read_payload.py --sweep")
-    ap.add_argument("--png", help="write the figure PNG here")
+    ap = argparse.ArgumentParser(description="Compare before/after read payload")
+    ap.add_argument("before", help="JSON from the no-defer run")
+    ap.add_argument("after", help="JSON from the defer run (#89)")
+    ap.add_argument("--png", help="write the comparison chart here")
+    ap.add_argument("--wire", default="text", choices=("text", "binary"))
     args = ap.parse_args()
 
-    with open(args.json_path) as f:
-        sw = json.load(f)
+    with open(args.before) as f:
+        before = json.load(f)
+    with open(args.after) as f:
+        after = json.load(f)
 
-    print(markdown(sw))
+    print(markdown(before, after))
     if args.png:
-        fig = figure(sw)
-        fig.savefig(args.png, dpi=150, bbox_inches="tight")
+        figure(before, after, args.wire).savefig(
+            args.png, dpi=150, bbox_inches="tight"
+        )
         print(f"\nwrote {args.png}")
     return 0
 
