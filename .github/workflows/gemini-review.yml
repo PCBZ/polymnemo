@@ -143,34 +143,14 @@ jobs:
               ${{ toJSON(steps.gemini_pr_review.outputs.summary) }},
             )
 
-      # Post the findings as inline PR comments with jq + gh — one per finding,
-      # prefixed by a severity dot (🔴 high · 🟠 medium · 🟡 low). A line GitHub
-      # rejects (not on the diff) is skipped individually, so it can't sink the
-      # rest; then post the overall summary. Repo / PR / sha come from the
-      # (trusted) github context; the model's text is read from review.json, never
-      # interpolated into the shell.
+      # Post the findings as inline PR comments (severity dot 🔴/🟠/🟡) + a
+      # summary. PR / sha are passed as args (trusted github context); repo comes
+      # from $GITHUB_REPOSITORY, auth from $GH_TOKEN, the payload from review.json.
       - name: 'Post inline review'
         if: ${{ steps.gemini_pr_review.outputs.summary != '' }}
         env:
           GH_TOKEN: '${{ steps.mint_identity_token.outputs.token || secrets.GITHUB_TOKEN || github.token }}'
         run: |
-          set -uo pipefail
-          # tolerate ```json ... ``` fences the model may wrap the JSON in
-          grep -v '^```' review.json > review.clean && mv review.clean review.json
-          repo='${{ github.repository }}'
-          pr='${{ github.event.pull_request.number || github.event.issue.number }}'
-          sha='${{ github.event.pull_request.head.sha }}'
-          jq -c '.comments[]?' review.json | while read -r c; do
-            case "$(jq -r '.severity // "low"' <<<"$c")" in
-              high) dot='🔴' ;; medium) dot='🟠' ;; *) dot='🟡' ;;
-            esac
-            gh api --method POST "repos/$repo/pulls/$pr/comments" \
-              -f commit_id="$sha" \
-              -f path="$(jq -r '.path' <<<"$c")" \
-              -F line="$(jq -r '.line' <<<"$c")" \
-              -f side='RIGHT' \
-              -f body="$dot $(jq -r '.body' <<<"$c")" \
-              || echo "::warning::skipped inline comment ($(jq -r '.path' <<<"$c"):$(jq -r '.line' <<<"$c")) — not on the diff"
-          done
-          jq -r '.summary // "## 🤖 Gemini review"' review.json \
-            | gh pr comment "$pr" --repo "$repo" --body-file -
+          .github/scripts/post_gemini_review.sh \
+            '${{ github.event.pull_request.number || github.event.issue.number }}' \
+            '${{ github.event.pull_request.head.sha }}'
