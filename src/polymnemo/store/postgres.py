@@ -35,11 +35,9 @@ def _observe(op: str, rows: Sequence[object]) -> None:
     embedding's read-path cost — and the saving once reads defer it (#89) —
     visible in a live deployment.
 
-    DEBUG level, guarded by ``isEnabledFor`` so production (INFO) pays nothing;
-    enable DEBUG on the ``polymnemo`` logger to land these lines.
+    DEBUG level — enable DEBUG on the ``polymnemo`` logger to land these lines;
+    ``logger.debug`` itself skips formatting/emitting when DEBUG is off.
     """
-    if not logger.isEnabledFor(logging.DEBUG):
-        return
     # `embedding` is in a row's unloaded set exactly when it was deferred (not
     # fetched). Reading `.unloaded` does not trigger a load.
     fetched = bool(rows) and "embedding" not in sa_inspect(rows[0]).unloaded  # type: ignore[union-attr]  # ORM instance -> InstanceState
