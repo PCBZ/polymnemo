@@ -5,9 +5,10 @@
 # lines are queryable with KQL (see README.md) — that's how we measure the
 # embedding read cost before/after #89 without touching prod.
 #
-# NOTE: this terraform has NOT been apply-tested. The branch DSN (local.test_dsn)
-# is assembled from the provider's role/password/pooled-host; verify it on the
-# first `terraform apply` (a bad DSN just means the test app can't connect).
+# NOTE: this terraform has not been applied end-to-end yet. The branch DSN
+# (local.test_dsn) is assembled from the provider's role/password/pooled-host;
+# verify it on the first successful `terraform apply` (a bad DSN just means the
+# test app can't connect — prod is untouched either way).
 
 data "terraform_remote_state" "neon" {
   backend = "azurerm"
@@ -44,21 +45,15 @@ data "neon_branch_role_password" "test" {
   role_name  = local.role
 }
 
-# Read back the branch's pooled host after the endpoint exists.
-data "neon_branch_endpoints" "test" {
-  project_id = local.project_id
-  branch_id  = neon_branch.test.id
-  depends_on = [neon_endpoint.test]
-}
-
 locals {
-  # Pooled host of the branch's read_write endpoint (PgBouncer), matching how the
-  # app connects in prod.
-  test_host_pooler = one([
-    for e in data.neon_branch_endpoints.test.endpoints :
-    e.host_pooling if e.type == "read_write"
-  ])
-  test_dsn = "postgresql://${local.role}:${data.neon_branch_role_password.test.password}@${local.test_host_pooler}/${local.db}?sslmode=require"
+  # Pooled host (PgBouncer) of the branch's read_write endpoint, matching how the
+  # app connects in prod. Taken straight off the resource: the `neon_branch_
+  # endpoints` data source can't be used here, because `endpoints` is a nested
+  # BLOCK list and the legacy SDKv2 protocol can't represent one as unknown — a
+  # read deferred to apply renders as `[]` during plan, so any lookup over it is
+  # null and the interpolation below fails before anything is created.
+  test_host_pooler = neon_endpoint.test.host_pooling
+  test_dsn         = "postgresql://${local.role}:${data.neon_branch_role_password.test.password}@${local.test_host_pooler}/${local.db}?sslmode=require"
 }
 
 module "container_apps" {
