@@ -5,10 +5,6 @@ terraform {
       source  = "kislerdm/neon"
       version = "~> 0.17"
     }
-    azurerm = {
-      source  = "hashicorp/azurerm"
-      version = "~> 4.0"
-    }
   }
 
   # Shares the Azure Storage backend with the other roots; coordinates via
@@ -20,9 +16,4 @@ terraform {
 
 provider "neon" {
   api_key = var.neon_api_key
-}
-
-provider "azurerm" {
-  features {}
-  subscription_id = var.azure_subscription_id
 }

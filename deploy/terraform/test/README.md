@@ -1,59 +1,66 @@
-# Test environment (DEBUG) — measure the embedding read cost via Log Analytics
+# Test branch — measure the embedding read cost (#89 / #96)
 
-A throwaway-ish **test env** for measuring what the embedding column costs on
-reads (#89 / #96), without touching prod:
+A **Neon branch** off the prod project (`branch_name`, default `test`): isolated,
+copy-on-write, so it inherits the prod schema *and* data for free while keeping
+the measurement's writes off prod.
 
-- a **Neon branch** off the prod project (`branch_name`, default `test`) — isolated,
-  copy-on-write, so it inherits the prod schema (no `schema.sql` step);
-- a **Container App** running the same public GHCR image with
-  **`POLYMNEMO_LOG_LEVEL=DEBUG`**, so the #96 read-payload observe lines land in
-  the module's Log Analytics workspace.
+That's all this root creates. You run polymnemo **locally** against the branch
+with `POLYMNEMO_LOG_LEVEL=DEBUG` and read the #96 observe lines off stdout.
 
-> ⚠️ This terraform is **not apply-tested**. In particular `local.test_dsn` is
-> assembled from the Neon provider's role / password / pooled host — verify it on
-> the first apply (a wrong DSN just means the test app can't reach the branch).
+> **Why not a deployed test app?** `_observe` computes the byte figure
+> arithmetically (`len(rows) * embed_dim * 4`) rather than sampling the wire, so
+> the numbers come out identical wherever the server runs. A Container App would
+> add an Azure environment quota, a second public endpoint holding a copy of prod
+> data, and a ~3-minute Log Analytics ingestion lag — for zero extra fidelity.
 
 ## Apply
 
-Prereqs: the `neon/` root is applied (this reads its state for the project id).
+`deploy (azure)` applies this root for you (the `test` job, beside `azure`), so a
+release keeps the branch in place. To apply it by hand — Prereqs: the `neon/` root
+is applied (this reads its state for the project id):
 
-```
-cp terraform.tfvars.example terraform.tfvars   # neon_api_key, azure_subscription_id,
-                                               # image, api_keys, tfstate_*
+```sh
+cp terraform.tfvars.example terraform.tfvars   # neon_api_key, tfstate_*
 terraform init \
   -backend-config=resource_group_name=<rg> \
   -backend-config=storage_account_name=<sa> \
   -backend-config=container_name=tfstate \
   -backend-config=key=test.tfstate
 terraform apply
-terraform output -raw mcp_endpoint
 ```
+
+> The branch is copy-on-write **at creation**. Once it exists Terraform leaves it
+> alone, so a later `schema.sql` change does not reach it — `terraform destroy`
+> and re-apply to pick one up.
 
 ## Measure (before vs after #89)
 
-1. Deploy the **no-defer** image (before #89) here, exercise some reads
-   (recall / list / get / a session load) against `mcp_endpoint`.
-2. Deploy the **+defer** image (after #89), exercise the same reads.
-3. Query the Log Analytics workspace (`<service_name>-logs`) with KQL and compare
-   the two time windows:
+Run the server against the branch, in its own terminal:
 
-```kusto
-ContainerAppConsoleLogs_CL
-| where ContainerAppName_s == "polymnemo-test"
-| where Log_s startswith "read "
-| parse Log_s with "read " op ": " rows:int " rows, embedding " state " (~" bytes:int " bytes)"
-| summarize reads = count(), total_bytes = sum(bytes), avg_bytes = avg(bytes)
-    by op, state, bin(TimeGenerated, 1h)
-| order by TimeGenerated desc
+```sh
+export POLYMNEMO_DATABASE_URL="$(terraform output -raw database_url)"
+export POLYMNEMO_LOG_LEVEL=DEBUG
+export POLYMNEMO_API_KEYS="testkey:tester"
+polymnemo 2>&1 | tee /tmp/polymnemo-debug.log
 ```
 
-- Before #89: `state == "fetched"`, `bytes > 0` (the embedding rode back on every read).
-- After #89: `state == "deferred"`, `bytes == 0`.
+Then drive it and collect, from another terminal:
 
-The difference in `total_bytes` per op is the transfer #89 saves.
+```sh
+python scripts/measure_test_env.py \
+  --key testkey --log /tmp/polymnemo-debug.log --out before.json
+```
+
+The script seeds once, replays the cases in `scripts/read_payload_cases.csv`, and
+saves the parsed observe records. Do that on **main** (no defer) for `before.json`,
+then check out the **#89 defer branch**, restart the server, and repeat for
+`after.json`.
+
+Compare: every read flips from `fetched (~N bytes)` to `deferred (~0)`. The
+difference in total bytes per op is the transfer #89 saves.
 
 ## Tear down
 
-```
-terraform destroy   # removes the test Container App + the Neon test branch
+```sh
+terraform destroy   # drops the Neon branch + its endpoint
 ```

@@ -4,34 +4,6 @@ variable "neon_api_key" {
   description = "Neon API key (same account as the prod neon/ root)."
 }
 
-variable "azure_subscription_id" {
-  type        = string
-  description = "Azure subscription id for the test Container App."
-}
-
-variable "image" {
-  type        = string
-  description = "Public GHCR image to run, e.g. ghcr.io/pcbz/polymnemo:v1.1.1. Must contain the POLYMNEMO_LOG_LEVEL support (>= the #102 merge)."
-}
-
-variable "api_keys" {
-  type        = string
-  sensitive   = true
-  description = "Per-user bearer keys for the test app, \"key1:alice,...\"."
-}
-
-variable "service_name" {
-  type        = string
-  default     = "polymnemo-test"
-  description = "Test Container App name (also its resource group / Log Analytics prefix)."
-}
-
-variable "location" {
-  type        = string
-  default     = "westus2"
-  description = "Azure region."
-}
-
 variable "branch_name" {
   type        = string
   default     = "test"

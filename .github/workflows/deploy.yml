@@ -10,12 +10,13 @@ name: deploy (azure)
 #
 # Job graph (GitHub renders this live in the run's "graph" view):
 #
-#   neon --> schema --+
-#   r2 --------------+--> azure
+#   neon --> schema --+--> azure <-- r2
+#                     '--> test
 #
 # neon and r2 run in parallel. schema waits for neon; azure waits for r2 + schema
 # (neon is covered transitively via schema, and the app never starts before its
-# tables exist).
+# tables exist). test branches off the same schema and runs beside azure, so a
+# problem with the measurement branch can never hold up the prod deploy.
 on:
   push:
     tags: ["v*"]
@@ -112,9 +113,6 @@ jobs:
     permissions:
       contents: read
       packages: write
-    # Expose the built image ref so the `test` job runs the exact same image.
-    outputs:
-      image: ${{ steps.img.outputs.image }}
     steps:
       - uses: actions/checkout@v4
       # ACR Tasks are blocked on personal/student subscriptions, so build the
@@ -123,7 +121,6 @@ jobs:
       # Context values go through env (not straight into run:) to avoid shell
       # injection from a crafted tag/dispatch input.
       - name: Resolve image reference
-        id: img
         env:
           REF_TYPE: ${{ github.ref_type }}
           REF_NAME: ${{ github.ref_name }}
@@ -136,7 +133,6 @@ jobs:
           else tag="$SHA"; fi
           image="ghcr.io/${OWNER,,}/polymnemo:${tag}"
           echo "TF_VAR_image=$image" >> "$GITHUB_ENV"
-          echo "image=$image" >> "$GITHUB_OUTPUT"
           # Tags to push: the versioned/SHA ref always; also move :latest ONLY on a
           # v* release, so the GCP backup's `latest` means "last released", not a
           # branch/SHA test build from a dispatch run.
@@ -198,36 +194,28 @@ jobs:
           echo "::error::App never responded (~5 min) — check the container logs."
           exit 1
 
-  # DEBUG test env: a Neon branch of prod + `polymnemo-test` running the SAME
-  # image at POLYMNEMO_LOG_LEVEL=DEBUG (so its reads emit the #96 observe log to
-  # Log Analytics; measure with scripts/measure_test_env.py). Runs after azure so
-  # prod is already deployed; a failure here (e.g. the branch DSN) can't block it.
+  # The #89/#96 measurement branch: a copy-on-write Neon branch of prod, so a
+  # locally-run DEBUG server has somewhere to read and write without touching
+  # prod (see deploy/terraform/test/README.md). No image and no Azure compute —
+  # just the branch — so this needs nothing beyond the secrets already in `env`.
+  #
+  # Depends on `schema` so a NEWLY created branch inherits the applied tables.
+  # Note an existing branch is left alone (it snapshots its parent at creation),
+  # so a later schema change does NOT reach it — recreate the branch for that.
   test:
-    name: test env (Neon branch + DEBUG app)
-    needs: [azure]
+    name: test (Neon measurement branch)
+    needs: [schema]
     runs-on: ubuntu-latest
-    env:
-      TF_VAR_image: ${{ needs.azure.outputs.image }}
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
       - uses: hashicorp/setup-terraform@v3
         with:
           terraform_version: "1.13.2"
-      - name: Terraform apply (test env)
+      - name: Terraform apply (test branch)
         working-directory: deploy/terraform/test
         run: |
           terraform init $TF_BACKEND -backend-config=key=test.tfstate
           terraform apply -auto-approve
-          url="$(terraform output -raw service_url)"
-          echo "test MCP endpoint: ${url}/mcp"
-          echo "Waiting for the test app at $url to come up…"
-          for i in $(seq 1 30); do
-            code=$(curl -sS -o /dev/null -w '%{http_code}' --max-time 10 "$url") || code=000
-            echo "  [$i] HTTP $code"
-            case "$code" in
-              2??|3??|4??) echo "Test app is up (HTTP $code)."; exit 0 ;;
-            esac
-            sleep 10
-          done
-          echo "::error::Test app never responded (~5 min) — check the container logs."
-          exit 1
+          # branch_id only — `database_url` carries the role password.
+          echo "test branch: $(terraform output -raw branch_id)"

@@ -1,22 +1,22 @@
 #!/usr/bin/env python
-"""Measure the read payload against the DEPLOYED test env (#89 / #96).
+"""Measure the read payload against the Neon test branch (#89 / #96).
 
-The test env runs at POLYMNEMO_LOG_LEVEL=DEBUG, so its reads emit the #96 observe
-log (`read <op>: N rows, embedding fetched|deferred (~M bytes)`), which Azure
-collects in Log Analytics. This script:
+Run polymnemo locally against the test branch at POLYMNEMO_LOG_LEVEL=DEBUG, so
+its reads emit the #96 observe log (`read <op>: N rows, embedding
+fetched|deferred (~M bytes)`). See deploy/terraform/test/README.md for the server
+command. This script:
 
-  1. targets the test env (its /mcp endpoint + Log Analytics workspace)
+  1. notes where the server's log file currently ends
   2. runs the explicit test cases from scripts/read_payload_cases.csv
      (op, fanout) — seeds once, then reads each op at its fan-out; the observe
      log self-labels by the "N rows" it returns
-  3. fetches the observe log lines from Log Analytics (via `az`)
-  4. saves them (parsed) to a local JSON file
+  3. parses the lines the run appended, and saves them to a local JSON file
 
-Run it once on the no-defer image and once on the +defer image, then compare the
+Run it once on main (no defer) and once on the +defer branch, then compare the
 two files: `fetched (~N bytes)` -> `deferred (~0)`.
 
-Needs: az (logged in; `az extension add -n log-analytics` if prompted), python3.
-stdlib only. Configure via flags or env (TEST_MCP_ENDPOINT, TEST_API_KEY, ...).
+Needs: python3, stdlib only. Configure via flags or env (TEST_MCP_ENDPOINT,
+TEST_API_KEY, TEST_LOG_FILE).
 """
 
 from __future__ import annotations
@@ -26,7 +26,6 @@ import csv
 import json
 import os
 import re
-import subprocess
 import sys
 import time
 import urllib.request
@@ -36,6 +35,8 @@ _OBSERVE_RE = re.compile(
     r"read (?P<op>\w+): (?P<rows>\d+) rows, embedding (?P<state>fetched|deferred) "
     r"\(~(?P<bytes>\d+) bytes\)"
 )
+# Leading `%(asctime)s` from the server's logging.basicConfig format.
+_TIME_RE = re.compile(r"^(\d{4}-\d\d-\d\d \d\d:\d\d:\d\d,\d{3})")
 
 
 def mcp(endpoint: str, key: str, tool: str, args: dict) -> dict:
@@ -111,40 +112,25 @@ def exercise(endpoint: str, key: str, cases: list[tuple[str, int]]) -> None:
         print(f"  {op:>8} @ fanout {n}")
 
 
-def _az(*args: str) -> str:
-    """Run `az <args>` and return its stdout."""
-    return subprocess.run(
-        ["az", *args], check=True, capture_output=True, text=True
-    ).stdout
+def log_end(path: str) -> int:
+    """Byte offset of the log's current end, so we only read what this run adds."""
+    return os.path.getsize(path) if os.path.exists(path) else 0
 
 
-def fetch_logs(app: str, rg: str, workspace: str) -> list[dict]:
-    """Pull the observe log lines from Log Analytics via az; parse to records."""
-    kql = (
-        "ContainerAppConsoleLogs_CL "
-        f"| where ContainerAppName_s == '{app}' "
-        "| where Log_s startswith 'read ' "
-        "| project TimeGenerated, Log_s "
-        "| order by TimeGenerated desc | take 1000"
-    )
-    # Keep the az invocations grouped/readable (not one arg per line).
-    # fmt: off
-    wsid = _az(
-        "monitor", "log-analytics", "workspace", "show",
-        "-g", rg, "-n", workspace, "--query", "customerId", "-o", "tsv",
-    ).strip()
-    raw = _az(
-        "monitor", "log-analytics", "query",
-        "--workspace", wsid, "--analytics-query", kql, "-o", "json",
-    )
-    # fmt: on
+def parse_logs(path: str, offset: int) -> list[dict]:
+    """Parse the observe lines the run appended past `offset`."""
+    with open(path, errors="replace") as f:
+        f.seek(offset)
+        lines = f.readlines()
+
     records = []
-    for row in json.loads(raw):
-        m = _OBSERVE_RE.search(row.get("Log_s", ""))
+    for line in lines:
+        m = _OBSERVE_RE.search(line)
         if m:
+            stamped = _TIME_RE.match(line)
             records.append(
                 {
-                    "time": row.get("TimeGenerated"),
+                    "time": stamped.group(1) if stamped else None,
                     "op": m["op"],
                     "rows": int(m["rows"]),
                     "state": m["state"],
@@ -155,50 +141,58 @@ def fetch_logs(app: str, rg: str, workspace: str) -> list[dict]:
 
 
 def main() -> int:
-    ap = argparse.ArgumentParser(description="Measure read payload on the test env")
+    ap = argparse.ArgumentParser(description="Measure read payload on the test branch")
     ap.add_argument(
-        "--endpoint", default=os.getenv("TEST_MCP_ENDPOINT"), help="test /mcp URL"
+        "--endpoint",
+        default=os.getenv("TEST_MCP_ENDPOINT", "http://127.0.0.1:8000/mcp"),
+        help="the locally-run server's /mcp URL",
     )
     ap.add_argument("--key", default=os.getenv("TEST_API_KEY"), help="bearer key")
-    ap.add_argument("--app", default=os.getenv("TEST_APP", "polymnemo-test"))
-    ap.add_argument("--rg", default=os.getenv("TEST_RG", "polymnemo-test-rg"))
-    ap.add_argument("--workspace", default=os.getenv("TEST_WORKSPACE"))
+    ap.add_argument(
+        "--log",
+        default=os.getenv("TEST_LOG_FILE"),
+        help="the server's log file (it must be running at DEBUG)",
+    )
     ap.add_argument(
         "--cases",
         default=os.path.join(os.path.dirname(__file__), "read_payload_cases.csv"),
         help="CSV of test cases (columns: op, fanout)",
     )
     ap.add_argument(
-        "--ingest-wait", type=int, default=180, help="Log Analytics lag (s)"
-    )
-    ap.add_argument(
         "--out", default=f"read-payload-{datetime.now():%Y%m%d-%H%M%S}.json"
     )
     args = ap.parse_args()
 
-    if not args.endpoint or not args.key:
+    if not args.key or not args.log:
         print(
-            "error: set --endpoint/--key (or TEST_MCP_ENDPOINT/TEST_API_KEY)",
+            "error: set --key/--log (or TEST_API_KEY/TEST_LOG_FILE)",
             file=sys.stderr,
         )
         return 2
-    workspace = args.workspace or f"{args.app}-logs"
+    if not os.path.exists(args.log):
+        print(
+            f"error: no log file at {args.log} — is the server running?",
+            file=sys.stderr,
+        )
+        return 2
     cases = read_cases(args.cases)
 
-    print(f"1) test env: {args.app}  ({args.endpoint})")
+    print(f"1) server: {args.endpoint}  (log: {args.log})")
+    offset = log_end(args.log)
+
     print(f"2) seed + read, {len(cases)} cases from {os.path.basename(args.cases)}")
     exercise(args.endpoint, args.key, cases)
 
-    print(f"3) wait {args.ingest_wait}s for Log Analytics ingestion")
-    time.sleep(args.ingest_wait)
+    # StreamHandler flushes per record, so this is just slack for a pipe.
+    time.sleep(1)
 
-    print("4) fetch observe logs")
-    records = fetch_logs(args.app, args.rg, workspace)
+    print("3) parse the observe lines this run appended")
+    records = parse_logs(args.log, offset)
     with open(args.out, "w") as f:
         json.dump(records, f, indent=2)
     print(f"saved {len(records)} observe records to {args.out}")
     if not records:
-        print("(0 records — ingestion may still be lagging; re-run in a minute)")
+        print("(0 records — is POLYMNEMO_LOG_LEVEL=DEBUG set on the server?)")
     return 0
 
 
