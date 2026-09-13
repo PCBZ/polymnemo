@@ -28,6 +28,12 @@ class Settings(BaseSettings):
         extra="ignore",
     )
 
+    # --- Logging -------------------------------------------------------------
+    # Root log level for the server. Bump to DEBUG (e.g. POLYMNEMO_LOG_LEVEL=DEBUG
+    # via a Container App env var) to land the #96 read-payload observe lines in
+    # Azure Log Analytics for measurement; keep INFO in normal production.
+    log_level: str = "INFO"
+
     # --- HTTP transport ------------------------------------------------------
     host: str = "127.0.0.1"
     # Prefer POLYMNEMO_PORT; fall back to Cloud Run's injected PORT; then 8000.

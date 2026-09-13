@@ -14,15 +14,41 @@ lazily by ``context`` only when a database is configured — the base install
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Iterable, Sequence
 from datetime import datetime
 
 from pgvector.sqlalchemy import Vector
 from sqlalchemy import ARRAY, Text, create_engine, delete, func, or_, select, update
+from sqlalchemy import inspect as sa_inspect
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column
 
 from ..config import settings
 from ..models import Memory
+
+logger = logging.getLogger("polymnemo")
+
+
+def _observe(op: str, rows: Sequence[object]) -> None:
+    """Log a read's payload (#96): how many rows came back and whether the
+    embedding column was fetched, with the bytes it (would) cost. This makes the
+    embedding's read-path cost — and the saving once reads defer it (#89) —
+    visible in a live deployment.
+
+    DEBUG level — enable DEBUG on the ``polymnemo`` logger to land these lines;
+    ``logger.debug`` itself skips formatting/emitting when DEBUG is off.
+    """
+    # `embedding` is in a row's unloaded set exactly when it was deferred (not
+    # fetched). Reading `.unloaded` does not trigger a load.
+    fetched = bool(rows) and "embedding" not in sa_inspect(rows[0]).unloaded  # type: ignore[union-attr]  # ORM instance -> InstanceState
+    embed_bytes = len(rows) * settings.embed_dim * 4 if fetched else 0
+    logger.debug(
+        "read %s: %d rows, embedding %s (~%d bytes)",
+        op,
+        len(rows),
+        "fetched" if fetched else "deferred",
+        embed_bytes,
+    )
 
 
 class Base(DeclarativeBase):
@@ -175,6 +201,7 @@ class PostgresStore:
         )
         with Session(self._engine) as session:
             row = session.execute(stmt).scalar_one_or_none()
+            _observe("get", [row] if row else [])
             return row.to_memory() if row else None
 
     def search(
@@ -202,10 +229,9 @@ class PostgresStore:
             .offset(offset)
         )
         with Session(self._engine) as session:
-            return [
-                row.to_memory(score=float(score))
-                for row, score in session.execute(stmt)
-            ]
+            results = session.execute(stmt).all()
+            _observe("search", [row for row, _ in results])
+            return [row.to_memory(score=float(score)) for row, score in results]
 
     def list_memories(
         self, user_id: str, namespace: str, limit: int, offset: int = 0
@@ -222,7 +248,9 @@ class PostgresStore:
             .offset(offset)
         )
         with Session(self._engine) as session:
-            return [row.to_memory() for row in session.execute(stmt).scalars()]
+            rows = session.execute(stmt).scalars().all()
+            _observe("list", rows)
+            return [row.to_memory() for row in rows]
 
     def count(self, user_id: str, namespace: str) -> int:
         stmt = (
@@ -244,7 +272,9 @@ class PostgresStore:
             .order_by(MemoryRow.seq)
         )
         with Session(self._engine) as session:
-            return [row.to_memory() for row in session.execute(stmt).scalars()]
+            rows = session.execute(stmt).scalars().all()
+            _observe("session", rows)
+            return [row.to_memory() for row in rows]
 
     def delete_session(self, user_id: str, session_id: str) -> int:
         stmt = delete(MemoryRow).where(
