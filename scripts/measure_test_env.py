@@ -111,28 +111,15 @@ def exercise(endpoint: str, key: str, cases: list[tuple[str, int]]) -> None:
         print(f"  {op:>8} @ fanout {n}")
 
 
+def _az(*args: str) -> str:
+    """Run `az <args>` and return its stdout."""
+    return subprocess.run(
+        ["az", *args], check=True, capture_output=True, text=True
+    ).stdout
+
+
 def fetch_logs(app: str, rg: str, workspace: str) -> list[dict]:
     """Pull the observe log lines from Log Analytics via az; parse to records."""
-    wsid = subprocess.run(
-        [
-            "az",
-            "monitor",
-            "log-analytics",
-            "workspace",
-            "show",
-            "-g",
-            rg,
-            "-n",
-            workspace,
-            "--query",
-            "customerId",
-            "-o",
-            "tsv",
-        ],
-        check=True,
-        capture_output=True,
-        text=True,
-    ).stdout.strip()
     kql = (
         "ContainerAppConsoleLogs_CL "
         f"| where ContainerAppName_s == '{app}' "
@@ -140,23 +127,17 @@ def fetch_logs(app: str, rg: str, workspace: str) -> list[dict]:
         "| project TimeGenerated, Log_s "
         "| order by TimeGenerated desc | take 1000"
     )
-    raw = subprocess.run(
-        [
-            "az",
-            "monitor",
-            "log-analytics",
-            "query",
-            "--workspace",
-            wsid,
-            "--analytics-query",
-            kql,
-            "-o",
-            "json",
-        ],
-        check=True,
-        capture_output=True,
-        text=True,
-    ).stdout
+    # Keep the az invocations grouped/readable (not one arg per line).
+    # fmt: off
+    wsid = _az(
+        "monitor", "log-analytics", "workspace", "show",
+        "-g", rg, "-n", workspace, "--query", "customerId", "-o", "tsv",
+    ).strip()
+    raw = _az(
+        "monitor", "log-analytics", "query",
+        "--workspace", wsid, "--analytics-query", kql, "-o", "json",
+    )
+    # fmt: on
     records = []
     for row in json.loads(raw):
         m = _OBSERVE_RE.search(row.get("Log_s", ""))
