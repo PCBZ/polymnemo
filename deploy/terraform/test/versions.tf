@@ -23,6 +23,13 @@ provider "neon" {
 }
 
 provider "azurerm" {
-  features {}
+  features {
+    # Default is soft-delete (14 days), which would resurrect the workspace in
+    # its ORIGINAL region when recreated under the same name — so a region move
+    # would silently drag it back. Test logs are disposable; drop them for real.
+    log_analytics_workspace {
+      permanently_delete_on_destroy = true
+    }
+  }
   subscription_id = var.azure_subscription_id
 }

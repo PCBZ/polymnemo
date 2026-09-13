@@ -27,8 +27,10 @@ variable "service_name" {
 }
 
 variable "location" {
-  type        = string
-  default     = "westus2"
+  type = string
+  # NOT westus2: Azure allows one Container App Environment per region per
+  # subscription, and prod holds that slot. Don't "align" this with prod.
+  default     = "westus3"
   description = "Azure region."
 }
 
