@@ -15,7 +15,9 @@ with `POLYMNEMO_LOG_LEVEL=DEBUG` and read the #96 observe lines off stdout.
 
 ## Apply
 
-Prereqs: the `neon/` root is applied (this reads its state for the project id).
+`deploy (azure)` applies this root for you (the `test` job, beside `azure`), so a
+release keeps the branch in place. To apply it by hand — Prereqs: the `neon/` root
+is applied (this reads its state for the project id):
 
 ```sh
 cp terraform.tfvars.example terraform.tfvars   # neon_api_key, tfstate_*
@@ -27,8 +29,9 @@ terraform init \
 terraform apply
 ```
 
-This root is applied **by hand** when you want to measure — it is deliberately
-not wired into `deploy (azure)`, so a release never touches it.
+> The branch is copy-on-write **at creation**. Once it exists Terraform leaves it
+> alone, so a later `schema.sql` change does not reach it — `terraform destroy`
+> and re-apply to pick one up.
 
 ## Measure (before vs after #89)
 

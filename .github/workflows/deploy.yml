@@ -10,12 +10,13 @@ name: deploy (azure)
 #
 # Job graph (GitHub renders this live in the run's "graph" view):
 #
-#   neon --> schema --+
-#   r2 --------------+--> azure
+#   neon --> schema --+--> azure <-- r2
+#                     '--> test
 #
 # neon and r2 run in parallel. schema waits for neon; azure waits for r2 + schema
 # (neon is covered transitively via schema, and the app never starts before its
-# tables exist).
+# tables exist). test branches off the same schema and runs beside azure, so a
+# problem with the measurement branch can never hold up the prod deploy.
 on:
   push:
     tags: ["v*"]
@@ -192,3 +193,29 @@ jobs:
           done
           echo "::error::App never responded (~5 min) — check the container logs."
           exit 1
+
+  # The #89/#96 measurement branch: a copy-on-write Neon branch of prod, so a
+  # locally-run DEBUG server has somewhere to read and write without touching
+  # prod (see deploy/terraform/test/README.md). No image and no Azure compute —
+  # just the branch — so this needs nothing beyond the secrets already in `env`.
+  #
+  # Depends on `schema` so a NEWLY created branch inherits the applied tables.
+  # Note an existing branch is left alone (it snapshots its parent at creation),
+  # so a later schema change does NOT reach it — recreate the branch for that.
+  test:
+    name: test (Neon measurement branch)
+    needs: [schema]
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.13.2"
+      - name: Terraform apply (test branch)
+        working-directory: deploy/terraform/test
+        run: |
+          terraform init $TF_BACKEND -backend-config=key=test.tfstate
+          terraform apply -auto-approve
+          # branch_id only — `database_url` carries the role password.
+          echo "test branch: $(terraform output -raw branch_id)"
