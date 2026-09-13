@@ -182,3 +182,40 @@ def test_shared_vs_private(store):
     assert store.count("bob", "diary") == 0
     # writes stay owner-only, even in a shared namespace
     assert store.update("bob", shared.id, "x", _vec((0, 1.0))) is None
+
+
+def test_reads_defer_embedding(store):
+    """#89: compare both states on the real read path.
+
+    AFTER (this branch): the real reads (get / list) no longer SELECT the
+    embedding column. BEFORE (an un-deferred SELECT): the row still loads it.
+    """
+    from sqlalchemy import event, select
+    from sqlalchemy import inspect as sa_inspect
+    from sqlalchemy.orm import Session
+
+    from polymnemo.store.postgres import MemoryRow
+
+    store.add(_mem(content="hello"), _vec((0, 1.0)))
+
+    selects: list[str] = []
+
+    def _capture(conn, cursor, statement, parameters, context, executemany):
+        if statement.lstrip().upper().startswith("SELECT"):
+            selects.append(statement)
+
+    event.listen(store._engine, "before_cursor_execute", _capture)
+    try:
+        store.get("alice", store.list_memories("alice", "shared", limit=1)[0].id)
+        store.list_memories("alice", "shared", limit=10)
+    finally:
+        event.remove(store._engine, "before_cursor_execute", _capture)
+
+    # AFTER: no read SELECT includes the embedding column.
+    assert selects
+    assert all("embedding" not in s.lower() for s in selects), selects
+
+    # BEFORE: an un-deferred SELECT still carries the vector.
+    with Session(store._engine) as session:
+        row = session.execute(select(MemoryRow).limit(1)).scalar_one()
+        assert "embedding" not in sa_inspect(row).unloaded  # loaded == fetched
