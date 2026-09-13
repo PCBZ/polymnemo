@@ -1,14 +1,8 @@
-# A DEBUG test environment: a Neon BRANCH of the prod project (isolated,
-# copy-on-write — inherits the prod schema so no schema.sql step) + a Container
-# App running the same GHCR image with POLYMNEMO_LOG_LEVEL=DEBUG. Its stdout goes
-# to the module's own Log Analytics workspace, so the #96 read-payload observe
-# lines are queryable with KQL (see README.md) — that's how we measure the
-# embedding read cost before/after #89 without touching prod.
-#
-# NOTE: this terraform has not been applied end-to-end yet. The branch DSN
-# (local.test_dsn) is assembled from the provider's role/password/pooled-host;
-# verify it on the first successful `terraform apply` (a bad DSN just means the
-# test app can't connect — prod is untouched either way).
+# A Neon BRANCH of the prod project — isolated and copy-on-write, so it inherits
+# the prod schema AND data (no schema.sql step) while keeping the measurement's
+# writes off prod. That's the whole test env: point a locally-run polymnemo at
+# `database_url` with POLYMNEMO_LOG_LEVEL=DEBUG and the #96 observe lines land in
+# your terminal. See README.md.
 
 data "terraform_remote_state" "neon" {
   backend = "azurerm"
@@ -26,7 +20,6 @@ locals {
   db         = data.terraform_remote_state.neon.outputs.database_name
 }
 
-# --- Test branch off prod (copy-on-write; carries the prod schema) ------------
 resource "neon_branch" "test" {
   project_id = local.project_id
   parent_id  = data.terraform_remote_state.neon.outputs.default_branch_id
@@ -46,19 +39,6 @@ data "neon_branch_role_password" "test" {
 }
 
 locals {
-  # Pooled host (PgBouncer) of the branch's read_write endpoint, as prod connects.
-  test_host_pooler = neon_endpoint.test.host_pooling
-  test_dsn         = "postgresql://${local.role}:${data.neon_branch_role_password.test.password}@${local.test_host_pooler}/${local.db}?sslmode=require"
-}
-
-module "container_apps" {
-  source              = "../modules/container-apps"
-  resource_group_name = "${var.service_name}-rg"
-  location            = var.location
-  service_name        = var.service_name
-  image               = var.image
-  database_url        = local.test_dsn
-  api_keys            = var.api_keys
-  log_level           = "DEBUG" # land the #96 observe lines in Log Analytics
-  # media/blob stays off (default) for the test env.
+  # host_pooling is the PgBouncer host, matching how prod connects.
+  test_dsn = "postgresql://${local.role}:${data.neon_branch_role_password.test.password}@${neon_endpoint.test.host_pooling}/${local.db}?sslmode=require"
 }

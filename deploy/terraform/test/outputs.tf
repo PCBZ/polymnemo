@@ -1,14 +1,10 @@
-output "mcp_endpoint" {
-  description = "The test MCP endpoint (DEBUG logging on)."
-  value       = module.container_apps.mcp_endpoint
+output "database_url" {
+  description = "Pooled DSN for the test branch — export as POLYMNEMO_DATABASE_URL."
+  value       = local.test_dsn
+  sensitive   = true
 }
 
-output "service_url" {
-  description = "Test Container App HTTPS URL."
-  value       = module.container_apps.service_url
-}
-
-output "log_analytics_workspace" {
-  description = "Query the #96 observe logs here (see README.md)."
-  value       = "${var.service_name}-logs"
+output "branch_id" {
+  description = "Neon branch id (handy for the Neon console / CLI)."
+  value       = neon_branch.test.id
 }
