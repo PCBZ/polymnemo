@@ -201,6 +201,11 @@ Postgres tests run when `TEST_DATABASE_URL` points at a pgvector Postgres. CI
 (`.github/workflows/ci.yml`) runs lint + the suite with coverage and posts a
 pass/fail/coverage table to each run's summary.
 
+`scripts/measure_read_bytes.py` measures what each read path actually transfers,
+against a real pgvector Postgres — run it on two branches to size a change. Method
+and current numbers: the
+[Performance](https://github.com/PCBZ/polymnemo/wiki/Performance) wiki page.
+
 ## Deploy
 
 polymnemo is stateless (all state in Neon + object storage), so it runs on
