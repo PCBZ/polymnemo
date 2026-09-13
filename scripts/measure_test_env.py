@@ -6,9 +6,9 @@ log (`read <op>: N rows, embedding fetched|deferred (~M bytes)`), which Azure
 collects in Log Analytics. This script:
 
   1. targets the test env (its /mcp endpoint + Log Analytics workspace)
-  2. for each fan-out in --rows, seeds N memories then exercises the real reads
-     (recall / list / get / session) — a fan-out sweep, self-labelled by the
-     "N rows" in each log line
+  2. runs the explicit test cases from scripts/read_payload_cases.csv
+     (op, fanout) — seeds once, then reads each op at its fan-out; the observe
+     log self-labels by the "N rows" it returns
   3. fetches the observe log lines from Log Analytics (via `az`)
   4. saves them (parsed) to a local JSON file
 
@@ -22,6 +22,7 @@ stdlib only. Configure via flags or env (TEST_MCP_ENDPOINT, TEST_API_KEY, ...).
 from __future__ import annotations
 
 import argparse
+import csv
 import json
 import os
 import re
@@ -66,33 +67,48 @@ def mcp(endpoint: str, key: str, tool: str, args: dict) -> dict:
     return {}
 
 
-def exercise(endpoint: str, key: str, rows: list[int]) -> None:
-    """Seed + read at each fan-out so the observe log covers a range of N rows."""
+def read_cases(path: str) -> list[tuple[str, int]]:
+    """Load the explicit test-case table (op, fanout) from CSV."""
+    with open(path, newline="") as f:
+        return [(r["op"].strip(), int(r["fanout"])) for r in csv.DictReader(f)]
+
+
+def exercise(endpoint: str, key: str, cases: list[tuple[str, int]]) -> None:
+    """Seed once (to the largest recall/list fan-out), then run each case's read
+    at its fan-out via `limit`. The #96 observe log self-labels by rows returned.
+
+    Note: the `recall` case reads via the recall tool, which the store logs as
+    op `search`; `list`/`get`/`session` keep their names.
+    """
     stamp = int(time.time())
-    for n in rows:
-        ns = f"measure-{stamp}-{n}"
-        for i in range(n):
+    ns = f"measure-{stamp}"
+    sess = f"measure-sess-{stamp}"
+    max_fanout = max((n for op, n in cases if op in ("recall", "list")), default=1)
+
+    ids: list[str] = []
+    for i in range(max_fanout):
+        r = mcp(
+            endpoint, key, "remember", {"content": f"measure row {i}", "namespace": ns}
+        )
+        if not ids:
+            ids = (r.get("structuredContent") or {}).get("ids", [])
+    mcp(endpoint, key, "save_session", {"session_id": sess, "content": "a\nb\nc"})
+
+    for op, n in cases:
+        if op == "recall":
             mcp(
                 endpoint,
                 key,
-                "remember",
-                {"content": f"measure row {i}", "namespace": ns},
+                "recall",
+                {"query": "measure", "namespace": ns, "limit": n},
             )
-        # reads that emit the #96 observe log, at fan-out n:
-        mcp(endpoint, key, "recall", {"query": "measure", "namespace": ns, "limit": n})
-        mcp(endpoint, key, "list_memories", {"namespace": ns, "limit": n})
-        print(f"  seeded + read {n:>4} rows  (namespace {ns})")
-
-    # get (1 row) + a session (get_session) once:
-    sess = f"measure-sess-{stamp}"
-    r = mcp(
-        endpoint, key, "remember", {"content": "single", "namespace": f"one-{stamp}"}
-    )
-    mid = (r.get("structuredContent") or {}).get("ids", [None])[0]
-    if mid:
-        mcp(endpoint, key, "get_memory", {"id": mid})
-    mcp(endpoint, key, "save_session", {"session_id": sess, "content": "a\nb\nc"})
-    mcp(endpoint, key, "load_session", {"session_id": sess})
+        elif op == "list":
+            mcp(endpoint, key, "list_memories", {"namespace": ns, "limit": n})
+        elif op == "get" and ids:
+            mcp(endpoint, key, "get_memory", {"id": ids[0]})
+        elif op == "session":
+            mcp(endpoint, key, "load_session", {"session_id": sess})
+        print(f"  {op:>8} @ fanout {n}")
 
 
 def fetch_logs(app: str, rg: str, workspace: str) -> list[dict]:
@@ -167,7 +183,9 @@ def main() -> int:
     ap.add_argument("--rg", default=os.getenv("TEST_RG", "polymnemo-test-rg"))
     ap.add_argument("--workspace", default=os.getenv("TEST_WORKSPACE"))
     ap.add_argument(
-        "--rows", default="1,8,20,100", help="comma-separated fan-outs to sweep"
+        "--cases",
+        default=os.path.join(os.path.dirname(__file__), "read_payload_cases.csv"),
+        help="CSV of test cases (columns: op, fanout)",
     )
     ap.add_argument(
         "--ingest-wait", type=int, default=180, help="Log Analytics lag (s)"
@@ -184,11 +202,11 @@ def main() -> int:
         )
         return 2
     workspace = args.workspace or f"{args.app}-logs"
-    rows = [int(x) for x in args.rows.split(",") if x.strip()]
+    cases = read_cases(args.cases)
 
     print(f"1) test env: {args.app}  ({args.endpoint})")
-    print(f"2) seed + read, fan-out sweep {rows}")
-    exercise(args.endpoint, args.key, rows)
+    print(f"2) seed + read, {len(cases)} cases from {os.path.basename(args.cases)}")
+    exercise(args.endpoint, args.key, cases)
 
     print(f"3) wait {args.ingest_wait}s for Log Analytics ingestion")
     time.sleep(args.ingest_wait)
