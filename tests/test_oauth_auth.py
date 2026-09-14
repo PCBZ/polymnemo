@@ -1,20 +1,20 @@
 """GitHub OAuth auth (#83): the bearer fallback, and the identity bridge.
 
-The point of these tests is the *coexistence*. `FastMCP(auth=...)` enforces at
-the transport layer, so if `verify_token` stopped falling back to the static key
-table, every non-OAuth client would start getting 401s — a regression that no
-other test would catch.
+The coexistence is the point: if `verify_token` stopped falling back to the
+static key table, every non-OAuth client would 401 and nothing else would catch
+it.
 """
 
 from __future__ import annotations
 
 import pytest
+from fastmcp.server.auth.providers.github import GitHubProvider
 
 from polymnemo.auth import AuthError, TokenSubjectAuth
 from polymnemo.auth.oauth import (
     BEARER_CLIENT_ID,
     GitHubOAuthProvider,
-    build_client_storage,
+    _build_client_storage,
     direct_dsn,
 )
 
@@ -36,21 +36,21 @@ async def _no_oauth(self, token: str):
 
 class TestBearerFallback:
     async def test_known_static_key_authenticates(self, provider, monkeypatch):
-        monkeypatch.setattr(GitHubOAuthProvider.__bases__[0], "verify_token", _no_oauth)
+        monkeypatch.setattr(GitHubProvider, "verify_token", _no_oauth)
         token = await provider.verify_token("sk-alice")
         assert token is not None
         assert token.subject == "alice"
         assert token.client_id == BEARER_CLIENT_ID
 
     async def test_unknown_token_is_rejected(self, provider, monkeypatch):
-        monkeypatch.setattr(GitHubOAuthProvider.__bases__[0], "verify_token", _no_oauth)
+        monkeypatch.setattr(GitHubProvider, "verify_token", _no_oauth)
         # None is what makes FastMCP answer 401 — not an exception.
         assert await provider.verify_token("sk-nope") is None
 
     async def test_oauth_wins_when_upstream_recognises_the_token(
         self, provider, monkeypatch
     ):
-        """A GitHub-issued token must not be shadowed by the static table."""
+        """A GitHub token must not be shadowed by the static table."""
         from fastmcp.server.dependencies import AccessToken
 
         async def _oauth_ok(self, token: str):
@@ -58,7 +58,7 @@ class TestBearerFallback:
                 token=token, client_id="github", scopes=[], subject="12345"
             )
 
-        monkeypatch.setattr(GitHubOAuthProvider.__bases__[0], "verify_token", _oauth_ok)
+        monkeypatch.setattr(GitHubProvider, "verify_token", _oauth_ok)
         # Deliberately a key that IS in the static table.
         token = await provider.verify_token("sk-alice")
         assert token.subject == "12345"
@@ -78,8 +78,7 @@ class TestTokenSubjectAuth:
         assert TokenSubjectAuth().authenticate({}) == "github:12345"
 
     def test_bearer_subject_is_left_alone(self, monkeypatch):
-        """Bearer subjects are already polymnemo user ids — prefixing them would
-        orphan every memory written before OAuth existed."""
+        """Prefixing these would orphan every memory written before OAuth."""
         from fastmcp.server.dependencies import AccessToken
 
         monkeypatch.setattr(
@@ -97,9 +96,8 @@ class TestTokenSubjectAuth:
 
 
 class TestDirectDsn:
-    """The OAuth store must bypass PgBouncer: asyncpg prepares statements per
-    connection, and py-key-value-aio's URL path exposes no way to turn that off.
-    """
+    """The OAuth store bypasses PgBouncer; asyncpg's statement cache can't be
+    turned off through py-key-value-aio's URL path."""
 
     def test_pooler_infix_is_stripped(self):
         assert direct_dsn(
@@ -112,24 +110,28 @@ class TestDirectDsn:
         dsn = "postgresql://u:p@localhost:5432/db"
         assert direct_dsn(dsn) == dsn
 
-    def test_only_the_host_infix_is_rewritten(self):
-        """A password or database name containing "-pooler." must survive."""
-        dsn = "postgresql://u:pw-pooler.x@ep-a-pooler.neon.tech/db"
-        # count=1 rewrites the first occurrence only — which is in the password
-        # here, so this documents the limitation rather than pretending it away.
-        assert direct_dsn(dsn).count("-pooler") == 1
+    def test_password_containing_the_infix_is_not_corrupted(self):
+        """The whole-string substitution this replaced hit the password first,
+        breaking the credential and leaving the host pooled."""
+        out = direct_dsn("postgresql://u:pw-pooler.x@ep-a-pooler.neon.tech/db")
+        assert out == "postgresql://u:pw-pooler.x@ep-a.neon.tech/db"
+
+    def test_percent_encoded_password_is_passed_through(self):
+        """Rebuilding netloc from urlparse's decoded parts would turn %40 into
+        @ and break the DSN."""
+        out = direct_dsn("postgresql://u:p%40ss@ep-a-pooler.neon.tech/db")
+        assert "p%40ss" in out
 
 
 class TestClientStorage:
     def test_no_database_means_no_shared_store(self):
         """Dev without Postgres falls back to FastMCP's local default."""
-        assert build_client_storage(None) is None
-        assert build_client_storage("") is None
+        assert _build_client_storage(None) is None
+        assert _build_client_storage("") is None
 
     def test_configured_store_does_not_auto_create(self):
-        """The table is a deploy step (scripts/schema.sql), so a missing one
-        should fail loudly rather than appear at runtime."""
-        store = build_client_storage("postgresql://u:p@host/db")
+        """The table is a deploy step, so a missing one must fail loudly."""
+        store = _build_client_storage("postgresql://u:p@host/db")
         assert store is not None
         assert store._auto_create is False
         assert store._table_name == "oauth_kv"

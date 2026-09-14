@@ -22,37 +22,45 @@ logger = logging.getLogger("polymnemo")
 
 
 def _build_auth_provider():
-    """The FastMCP auth provider, or None to leave the transport unauthenticated.
+    """The FastMCP auth provider, or None to leave the transport unauthenticated
+    and let polymnemo's own ``Auth`` layer read bearer keys off the header.
 
-    None means polymnemo's own ``Auth`` layer does all the work (bearer keys read
-    from the header, as before #83). A provider means FastMCP verifies first and
-    ``TokenSubjectAuth`` reads the result.
-
-    Imported lazily so the OAuth stack is only pulled in when it's configured.
+    Imported lazily so the OAuth stack is only pulled in when configured.
     """
     if not settings.oauth_enabled:
         return None
-    from .auth.oauth import GitHubOAuthProvider, build_client_storage
+    from fastmcp.server.auth.redirect_validation import DEFAULT_LOCALHOST_PATTERNS
+
+    from .auth.oauth import GitHubOAuthProvider, _build_client_storage
 
     return GitHubOAuthProvider(
         client_id=settings.oauth_client_id,
         client_secret=settings.oauth_client_secret,
         base_url=settings.oauth_base_url,
-        # Bearer keys stay valid alongside OAuth, so CI and weak-OAuth clients
-        # keep working; without this they'd 401 at the transport layer.
+        # Without these, bearer callers would 401 at the transport layer.
         static_keys=settings.parse_api_keys(),
-        # A login spans four requests; Container Apps round-robins them across
-        # replicas, so the flow state has to be shared, not on local disk.
-        client_storage=build_client_storage(settings.database_url),
+        # A login spans four requests that Container Apps spreads across
+        # replicas, so the flow state can't sit on local disk.
+        client_storage=_build_client_storage(settings.database_url),
+        # MUST be set: DCR lets a client register any redirect URI, and the
+        # upstream default accepts all of them — an attacker could collect a
+        # victim's authorization code. Localhost-only fits real MCP clients; a
+        # hosted one has to be added here deliberately.
+        allowed_client_redirect_uris=DEFAULT_LOCALHOST_PATTERNS,
+        # Else every tool call re-validates upstream: a GET api.github.com/user
+        # per recall, burning latency and the 5000/hr token budget.
+        cache_ttl_seconds=300,
     )
 
 
 mcp: FastMCP = FastMCP(
     name="polymnemo",
     version=__version__,
+    # Surfaced to end users, so it can't name just one scheme.
     instructions=(
-        "Shared long-term memory across any LLM. Authenticate with a per-user "
-        "bearer key; use `remember` to store and `recall` to search semantically."
+        "Shared long-term memory across any LLM. Authenticate with GitHub "
+        "sign-in or a per-user bearer key, whichever this server offers; use "
+        "`remember` to store and `recall` to search semantically."
     ),
     auth=_build_auth_provider(),
 )

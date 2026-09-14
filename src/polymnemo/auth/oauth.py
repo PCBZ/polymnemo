@@ -1,27 +1,15 @@
 """GitHub OAuth auth — self-provisioning identity, with bearer keys as fallback.
 
-``BearerKeyAuth`` requires the maintainer to hand-edit a secret and redeploy for
-every new user (#83). OAuth removes that: a caller logs in with GitHub, FastMCP
-verifies the token, and the stable ``sub`` becomes the ``user_id``. There is no
-user table — the identity provider is the user database.
-
-Two pieces, because FastMCP and polymnemo each own one half of auth:
-
-- ``GitHubOAuthProvider`` plugs into ``FastMCP(auth=...)`` and *verifies* tokens
-  at the transport layer.
-- ``TokenSubjectAuth`` implements polymnemo's ``Auth`` seam and *reads* the
-  already-verified identity, so ``current_user()`` and the tools don't change.
-
-Both schemes coexist by design: ``verify_token`` tries OAuth first and falls
-back to the static key table, so CI and clients with weak OAuth support keep
-working. Whichever path a caller took, the ``user_id`` arrives through one
-field — ``AccessToken.subject``.
+``GitHubOAuthProvider`` verifies tokens at the transport layer (#83);
+``TokenSubjectAuth`` reads that verified identity through polymnemo's ``Auth``
+seam, so the tools don't change. Both schemes coexist: whichever path a caller
+took, the ``user_id`` arrives as ``AccessToken.subject``.
 """
 
 from __future__ import annotations
 
-import re
 from collections.abc import Mapping
+from urllib.parse import urlparse, urlunparse
 
 from fastmcp.server.auth.providers.github import GitHubProvider
 from fastmcp.server.dependencies import AccessToken, get_access_token
@@ -29,22 +17,18 @@ from key_value.aio.stores.postgresql import PostgreSQLStore
 
 from .base import AuthError
 
-# Created by scripts/schema.sql, like every other table. Must match the shape
-# py-key-value-aio expects.
+# Created by scripts/schema.sql; shape must match what py-key-value-aio expects.
 OAUTH_KV_TABLE = "oauth_kv"
-
-# Marks a token that authenticated via the static key table rather than OAuth,
-# so logs and debugging can tell the two apart.
+# Marks a token that came from the static key table rather than OAuth.
 BEARER_CLIENT_ID = "static-bearer"
 
 
 class GitHubOAuthProvider(GitHubProvider):
     """GitHub OAuth, plus the static bearer-key table as a fallback.
 
-    ``FastMCP(auth=...)`` enforces at the transport layer: without this
-    subclass a static key would be rejected with 401 before reaching any tool,
-    which would break every non-OAuth client. ``verify_token`` is the single
-    seam where both schemes can live, so it is the only thing overridden.
+    ``FastMCP(auth=...)`` enforces at the transport layer, so a static key would
+    401 before reaching any tool. ``verify_token`` is the one seam where both
+    schemes can live, hence the only override.
     """
 
     def __init__(self, *args, static_keys: Mapping[str, str] | None = None, **kwargs):
@@ -71,9 +55,7 @@ class GitHubOAuthProvider(GitHubProvider):
 class TokenSubjectAuth:
     """Resolve ``user_id`` from the token FastMCP already verified.
 
-    Implements the ``Auth`` Protocol but ignores ``headers``: by the time a tool
-    runs, the transport layer has verified the credential and stashed it in the
-    request context. Re-parsing the header here would mean trusting it twice.
+    Ignores ``headers``: re-parsing the credential here would trust it twice.
     """
 
     def __init__(self, provider_prefix: str = "github") -> None:
@@ -91,29 +73,33 @@ class TokenSubjectAuth:
 
 
 def direct_dsn(dsn: str) -> str:
-    """Neon's DIRECT endpoint for a pooled DSN — strip the ``-pooler`` infix.
+    """Neon's DIRECT endpoint for a pooled DSN — strip ``-pooler`` from the HOST.
 
-    The app talks to Neon through PgBouncer in transaction mode, which is right
-    for short web requests but wrong for asyncpg: asyncpg prepares statements
-    per connection, and PgBouncer hands out a different backend per transaction,
-    so a prepared statement goes missing intermittently. ``postgres.py`` dodges
-    this for psycopg with ``prepare_threshold=None``; the equivalent knob here is
-    ``statement_cache_size``, which py-key-value-aio's URL path gives us no way
-    to set (and asyncpg silently ignores it as a DSN parameter — verified).
+    asyncpg prepares statements per connection while PgBouncer swaps backends per
+    transaction, so they go missing intermittently — the trap ``postgres.py``
+    avoids with ``prepare_threshold=None``. The asyncpg equivalent,
+    ``statement_cache_size``, can't be reached through py-key-value-aio's URL
+    path, so bypass the pooler instead. Unchanged if the host has no ``-pooler``.
 
-    Bypassing the pooler avoids the problem outright, and this store's traffic is
-    a handful of rows per login, so it doesn't need PgBouncer's multiplexing.
-    A DSN with no ``-pooler`` is returned unchanged.
+    Host only: substituting across the DSN would hit a password containing
+    ``-pooler.`` first, breaking the credential AND leaving the host pooled.
+    Credentials pass through verbatim because urlparse percent-decodes them.
     """
-    return re.sub(r"-pooler(\.)", r"\1", dsn, count=1)
+    parsed = urlparse(dsn)
+    # userinfo must percent-encode "@", so the last one starts host:port.
+    userinfo, _, hostport = parsed.netloc.rpartition("@")
+    if "-pooler." not in hostport:
+        return dsn
+    hostport = hostport.replace("-pooler.", ".", 1)
+    netloc = f"{userinfo}@{hostport}" if userinfo else hostport
+    return urlunparse(parsed._replace(netloc=netloc))
 
 
-def build_client_storage(database_url: str | None) -> PostgreSQLStore | None:
-    """Shared storage for the OAuth proxy's flow state, or None to let FastMCP
-    fall back to its local-filesystem default (fine for single-process dev).
+def _build_client_storage(database_url: str | None) -> PostgreSQLStore | None:
+    """Shared storage for the OAuth flow state, or None to let FastMCP fall back
+    to its local-filesystem default (fine for single-process dev).
 
-    ``auto_create=False``: the table is a deploy step (scripts/schema.sql), so a
-    missing one should fail loudly rather than be conjured at runtime.
+    ``auto_create=False`` because the table is a deploy step, not runtime DDL.
     """
     if not database_url:
         return None

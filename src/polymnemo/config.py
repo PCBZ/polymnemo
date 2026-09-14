@@ -104,6 +104,20 @@ class Settings(BaseSettings):
     ratelimit_per_min: int = 600
 
     @model_validator(mode="after")
+    def _check_auth(self) -> Settings:
+        """Reject static auth combined with OAuth — silently, every caller would
+        collapse to one ``user_id`` and share a namespace. Easy to hit by leaving
+        a dev ``AUTH_BACKEND=static`` in place while adding OAuth credentials.
+        """
+        if self.auth_backend == "static" and self.oauth_enabled:
+            raise ValueError(
+                "POLYMNEMO_AUTH_BACKEND=static is incompatible with OAuth "
+                "(every caller would collapse to one user_id). Unset "
+                "AUTH_BACKEND, or clear the POLYMNEMO_OAUTH_* credentials."
+            )
+        return self
+
+    @model_validator(mode="after")
     def _check_ratelimit(self) -> Settings:
         if self.ratelimit_enabled and self.ratelimit_per_min < MAX_TOOL_COST:
             raise ValueError(
@@ -130,11 +144,9 @@ class Settings(BaseSettings):
     # --- Auth ----------------------------------------------------------------
     # "bearer" (per-user keys, the real scheme) or "static" (dev, single user).
     auth_backend: str = "bearer"
-    # GitHub OAuth (#83), so users self-provision instead of the maintainer
-    # hand-editing a secret per person. Set all three to enable it; bearer keys
-    # keep working alongside, for CI and clients with weak OAuth support.
-    # oauth_base_url is this deployment's PUBLIC origin — the OAuth app's
-    # callback must be <oauth_base_url>/auth/callback.
+    # GitHub OAuth (#83), so users self-provision. All three enable it; bearer
+    # keys keep working alongside. oauth_base_url is this deployment's PUBLIC
+    # origin — the OAuth app's callback must be <oauth_base_url>/auth/callback.
     oauth_client_id: str = ""
     oauth_client_secret: str = ""
     oauth_base_url: str = ""
