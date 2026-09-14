@@ -20,13 +20,51 @@ from .tooling import current_user, rate_limited, tool_errors
 
 logger = logging.getLogger("polymnemo")
 
+
+def _build_auth_provider():
+    """The FastMCP auth provider, or None to leave the transport unauthenticated
+    and let polymnemo's own ``Auth`` layer read bearer keys off the header.
+
+    Imported lazily so the OAuth stack is only pulled in when configured.
+    """
+    if not settings.oauth_enabled:
+        return None
+    from fastmcp.server.auth.redirect_validation import DEFAULT_LOCALHOST_PATTERNS
+
+    from .auth.oauth import GitHubOAuthProvider, _build_client_storage
+
+    return GitHubOAuthProvider(
+        client_id=settings.oauth_client_id,
+        client_secret=settings.oauth_client_secret,
+        base_url=settings.oauth_base_url,
+        # Without these, bearer callers would 401 at the transport layer.
+        static_keys=settings.parse_api_keys(),
+        # A login spans four requests that Container Apps spreads across
+        # replicas, so the flow state can't sit on local disk.
+        client_storage=_build_client_storage(settings.database_url),
+        # MUST be set: DCR lets a client register any redirect URI, and the
+        # upstream default accepts all of them — an attacker could collect a
+        # victim's authorization code. Localhost covers clients that listen on a
+        # loopback port; hosted ones are opted in by config, never by default.
+        allowed_client_redirect_uris=(
+            DEFAULT_LOCALHOST_PATTERNS + settings.parse_allowed_redirect_uris()
+        ),
+        # Else every tool call re-validates upstream: a GET api.github.com/user
+        # per recall, burning latency and the 5000/hr token budget.
+        cache_ttl_seconds=300,
+    )
+
+
 mcp: FastMCP = FastMCP(
     name="polymnemo",
     version=__version__,
+    # Surfaced to end users, so it can't name just one scheme.
     instructions=(
-        "Shared long-term memory across any LLM. Authenticate with a per-user "
-        "bearer key; use `remember` to store and `recall` to search semantically."
+        "Shared long-term memory across any LLM. Authenticate with GitHub "
+        "sign-in or a per-user bearer key, whichever this server offers; use "
+        "`remember` to store and `recall` to search semantically."
     ),
+    auth=_build_auth_provider(),
 )
 
 

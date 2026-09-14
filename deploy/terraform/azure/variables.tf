@@ -38,6 +38,27 @@ variable "api_keys" {
   description = "Per-user keys \"key1:alice,key2:bob\", injected as POLYMNEMO_API_KEYS."
 }
 
+# GitHub OAuth (#83). Blank keeps bearer-only auth, so this stays optional and a
+# deploy without the secrets configured behaves exactly as before.
+variable "oauth_client_id" {
+  type        = string
+  default     = ""
+  description = "GitHub OAuth app client id."
+}
+
+variable "oauth_client_secret" {
+  type        = string
+  sensitive   = true
+  default     = ""
+  description = "GitHub OAuth app client secret."
+}
+
+variable "oauth_allowed_redirect_uris" {
+  type        = string
+  default     = ""
+  description = "Comma-separated extra client redirect-URI patterns (hosted MCP clients)."
+}
+
 # --- Remote-state backend (Azure Storage) — where the neon/ and r2/ roots' state
 # lives, so this root can read it via terraform_remote_state. Same values used at
 # `terraform init -backend-config`. The deploy workflow sets these from GitHub

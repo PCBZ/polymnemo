@@ -29,9 +29,15 @@ terraform init \
 terraform apply
 ```
 
-> The branch is copy-on-write **at creation**. Once it exists Terraform leaves it
-> alone, so a later `schema.sql` change does not reach it — `terraform destroy`
-> and re-apply to pick one up.
+> The branch is copy-on-write **at creation**, not a live mirror of prod — a
+> later `schema.sql` change never reaches it on its own. The `test` job applies
+> `schema.sql` to the branch after the apply, so a release keeps it current.
+> Applying it by hand:
+>
+> ```sh
+> psql "$(terraform output -raw database_url)" -v ON_ERROR_STOP=1 \
+>   -f ../../../scripts/schema.sql
+> ```
 
 ## Measure (before vs after #89)
 

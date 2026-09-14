@@ -15,7 +15,7 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass
 
-from .auth import Auth, BearerKeyAuth, StaticAuth
+from .auth import Auth, BearerKeyAuth, StaticAuth, TokenSubjectAuth
 from .blobstore import BlobStore
 from .config import settings
 from .embedding import Embedder, FastEmbedEmbedder, StubEmbedder
@@ -79,6 +79,11 @@ def _build_store() -> Store:
 def _build_auth() -> Auth:
     if settings.auth_backend == "static":
         return StaticAuth()
+    if settings.oauth_enabled:
+        # The transport layer verified the credential (see auth/oauth.py); read
+        # the identity off it. Covers OAuth *and* bearer callers, because the
+        # provider funnels both into AccessToken.subject.
+        return TokenSubjectAuth()
     keys = settings.parse_api_keys()
     if not keys:
         logger.warning(

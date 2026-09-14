@@ -11,6 +11,8 @@ skeleton carries. Later issues extend this (database URL in #2/#6, API keys in
 
 from __future__ import annotations
 
+from urllib.parse import urlparse
+
 from pydantic import AliasChoices, Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -104,6 +106,41 @@ class Settings(BaseSettings):
     ratelimit_per_min: int = 600
 
     @model_validator(mode="after")
+    def _check_auth(self) -> Settings:
+        """Reject static auth combined with OAuth — silently, every caller would
+        collapse to one ``user_id`` and share a namespace. Easy to hit by leaving
+        a dev ``AUTH_BACKEND=static`` in place while adding OAuth credentials.
+        """
+        if self.auth_backend == "static" and self.oauth_enabled:
+            raise ValueError(
+                "POLYMNEMO_AUTH_BACKEND=static is incompatible with OAuth "
+                "(every caller would collapse to one user_id). Unset "
+                "AUTH_BACKEND, or clear the POLYMNEMO_OAUTH_* credentials."
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _check_redirect_uri_patterns(self) -> Settings:
+        """Reject malformed redirect-URI patterns at startup.
+
+        These feed a security allowlist, and a bad one fails *closed*: it matches
+        nothing, so the operator believes a client is allowed and only finds out
+        when someone can't log in, from an error that names the client rather
+        than the config. Checking the scheme too, since "htts://host/cb" has a
+        perfectly good host and would otherwise slip through.
+        """
+        for pattern in self.parse_allowed_redirect_uris():
+            parsed = urlparse(pattern)
+            if parsed.scheme not in ("http", "https") or not parsed.netloc:
+                raise ValueError(
+                    f"POLYMNEMO_OAUTH_ALLOWED_REDIRECT_URIS entry {pattern!r} is "
+                    "not a usable pattern (needs an http/https scheme and a "
+                    "host, e.g. https://inspector.example.com/oauth/callback). "
+                    "It would never match a client."
+                )
+        return self
+
+    @model_validator(mode="after")
     def _check_ratelimit(self) -> Settings:
         if self.ratelimit_enabled and self.ratelimit_per_min < MAX_TOOL_COST:
             raise ValueError(
@@ -130,8 +167,31 @@ class Settings(BaseSettings):
     # --- Auth ----------------------------------------------------------------
     # "bearer" (per-user keys, the real scheme) or "static" (dev, single user).
     auth_backend: str = "bearer"
+    # GitHub OAuth (#83), so users self-provision. All three enable it; bearer
+    # keys keep working alongside. oauth_base_url is this deployment's PUBLIC
+    # origin — the OAuth app's callback must be <oauth_base_url>/auth/callback.
+    oauth_client_id: str = ""
+    oauth_client_secret: str = ""
+    oauth_base_url: str = ""
+    # Extra client redirect-URI patterns, comma-separated. ADDED to the
+    # localhost-only default, never replacing it, so a bad value can't widen the
+    # floor. Needed for hosted MCP clients, which don't use a loopback callback.
+    oauth_allowed_redirect_uris: str = ""
     # Per-user keys as "key1:alice,key2:bob" (env POLYMNEMO_API_KEYS).
     api_keys: str = ""
+
+    @property
+    def oauth_enabled(self) -> bool:
+        """OAuth needs all three: a client pair, and the origin to call back to."""
+        return bool(
+            self.oauth_client_id and self.oauth_client_secret and self.oauth_base_url
+        )
+
+    def parse_allowed_redirect_uris(self) -> list[str]:
+        """Extra redirect-URI patterns as a list (see the field's note)."""
+        return [
+            u.strip() for u in self.oauth_allowed_redirect_uris.split(",") if u.strip()
+        ]
 
     def parse_api_keys(self) -> dict[str, str]:
         """Parse ``api_keys`` into an ``{api_key: user_id}`` map."""

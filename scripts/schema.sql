@@ -59,3 +59,25 @@ CREATE TABLE IF NOT EXISTS api_keys (
     api_key  TEXT PRIMARY KEY,
     user_id  TEXT NOT NULL
 );
+
+-- OAuth proxy state (#83): DCR client registrations, authorization `state`, and
+-- PKCE verifiers. Short-lived rows — every entry carries a TTL and FastMCP
+-- expires them — but it MUST be shared storage, not the library's default local
+-- filesystem: a single login spans /register -> /authorize -> /auth/callback ->
+-- /token, and Container Apps round-robins those across replicas with no session
+-- affinity, so per-replica state breaks the flow intermittently.
+--
+-- Created here rather than by the library's auto_create, so the schema stays a
+-- deploy step like every other table. The app runs with auto_create=False and
+-- fails fast if this is missing. Shape must match what py-key-value-aio expects.
+CREATE TABLE IF NOT EXISTS oauth_kv (
+    collection  TEXT NOT NULL,
+    key         TEXT NOT NULL,
+    value       JSONB NOT NULL,
+    ttl         DOUBLE PRECISION,
+    created_at  TIMESTAMPTZ,
+    expires_at  TIMESTAMPTZ,
+    PRIMARY KEY (collection, key)
+);
+CREATE INDEX IF NOT EXISTS idx_oauth_kv_expires_at
+    ON oauth_kv (expires_at) WHERE expires_at IS NOT NULL;

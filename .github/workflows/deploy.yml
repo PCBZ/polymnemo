@@ -45,6 +45,13 @@ env:
   TF_VAR_neon_api_key: ${{ secrets.NEON_API_KEY }}
   TF_VAR_cf_account_id: ${{ secrets.CF_ACCOUNT_ID }}
   TF_VAR_api_keys: ${{ secrets.POLYMNEMO_API_KEYS }}
+  # GitHub OAuth (#83). Unset secrets resolve to "", which leaves the app on
+  # bearer-only auth — so this is safe before the OAuth app is registered.
+  TF_VAR_oauth_client_id: ${{ secrets.POLYMNEMO_OAUTH_CLIENT_ID }}
+  TF_VAR_oauth_client_secret: ${{ secrets.POLYMNEMO_OAUTH_CLIENT_SECRET }}
+  # A variable, not a secret: these are public callback URLs, and being able to
+  # read them back is what lets an operator confirm what's actually allowed.
+  TF_VAR_oauth_allowed_redirect_uris: ${{ vars.POLYMNEMO_OAUTH_ALLOWED_REDIRECT_URIS }}
   TF_VAR_azure_subscription_id: ${{ secrets.ARM_SUBSCRIPTION_ID }}
   TF_VAR_tfstate_resource_group: ${{ vars.TFSTATE_RESOURCE_GROUP }}
   TF_VAR_tfstate_storage_account: ${{ vars.TFSTATE_STORAGE_ACCOUNT }}
@@ -199,9 +206,11 @@ jobs:
   # prod (see deploy/terraform/test/README.md). No image and no Azure compute —
   # just the branch — so this needs nothing beyond the secrets already in `env`.
   #
-  # Depends on `schema` so a NEWLY created branch inherits the applied tables.
-  # Note an existing branch is left alone (it snapshots its parent at creation),
-  # so a later schema change does NOT reach it — recreate the branch for that.
+  # Depends on `schema` so a newly created branch inherits the applied tables,
+  # and then applies schema.sql to the branch itself. A Neon branch is
+  # copy-on-write AT CREATION, not a live mirror, so a later schema change never
+  # reaches an existing branch on its own — applying it here keeps the branch
+  # current without destroying and recreating it (which would drop its data).
   test:
     name: test (Neon measurement branch)
     needs: [schema]
@@ -212,10 +221,15 @@ jobs:
       - uses: hashicorp/setup-terraform@v3
         with:
           terraform_version: "1.13.2"
-      - name: Terraform apply (test branch)
+      # psql ships preinstalled on ubuntu-latest — no apt step needed.
+      - name: Terraform apply (test branch) + schema
         working-directory: deploy/terraform/test
         run: |
           terraform init $TF_BACKEND -backend-config=key=test.tfstate
           terraform apply -auto-approve
           # branch_id only — `database_url` carries the role password.
           echo "test branch: $(terraform output -raw branch_id)"
+          # Same file prod gets, and idempotent (everything is IF NOT EXISTS),
+          # so this is a no-op whenever the branch is already up to date.
+          psql "$(terraform output -raw database_url)" -v ON_ERROR_STOP=1 \
+            -f ../../../scripts/schema.sql
