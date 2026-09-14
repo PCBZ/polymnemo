@@ -36,6 +36,39 @@ variable "api_keys" {
   description = "Per-user keys \"key1:alice,key2:bob\", injected as POLYMNEMO_API_KEYS."
 }
 
+# GitHub OAuth (#83). Blank leaves bearer-only auth, so a GCP failover deploy
+# without these behaves exactly as it did before.
+#
+# NOTE: like database_url and api_keys above, these land as PLAIN env values —
+# this module doesn't use Secret Manager. That's pre-existing here (Azure uses
+# Container App secrets for the same values), not something OAuth introduces,
+# but it does mean the client secret is visible to anyone who can run
+# `gcloud run services describe`.
+variable "oauth_client_id" {
+  type        = string
+  default     = ""
+  description = "GitHub OAuth app client id, injected as POLYMNEMO_OAUTH_CLIENT_ID."
+}
+
+variable "oauth_client_secret" {
+  type        = string
+  sensitive   = true
+  default     = ""
+  description = "GitHub OAuth app client secret."
+}
+
+variable "oauth_base_url" {
+  type        = string
+  default     = ""
+  description = "This service's PUBLIC origin. Cloud Run's URL contains a project-specific hash that can't be derived before creation, so unlike the Azure module this must be supplied."
+}
+
+variable "oauth_allowed_redirect_uris" {
+  type        = string
+  default     = ""
+  description = "Comma-separated extra client redirect-URI patterns."
+}
+
 # --- Media / blob storage (R2). "none" leaves the media tools off. ------------
 variable "blob_backend" {
   type        = string

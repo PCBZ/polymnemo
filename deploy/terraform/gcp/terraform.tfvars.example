@@ -12,6 +12,18 @@ image = "ghcr.io/pcbz/polymnemo:v1.0.0"
 
 # Instance sizing lives in modules/cloud-run/variables.tf.
 
+# --- GitHub OAuth (optional) ------------------------------------------------
+# Leave blank to keep this failover on bearer keys only.
+#
+# oauth_base_url is THIS service's URL, not Azure's — a Cloud Run URL carries a
+# project-specific hash, so it only exists after the first apply. Deploy once
+# with these blank, take `terraform output -raw service_url`, add
+# <that>/auth/callback to the GitHub OAuth app's redirect URIs, then set them
+# here and apply again.
+# oauth_client_id     = "Iv23li..."
+# oauth_client_secret = "..."
+# oauth_base_url      = "https://polymnemo-abc123-uw.a.run.app"
+
 # --- Remote state (Azure Storage) -------------------------------------------
 # The shared neon/ + r2/ state lives in the Azure Storage backend; this root
 # reads it from there, so pass the same coordinates at `terraform init

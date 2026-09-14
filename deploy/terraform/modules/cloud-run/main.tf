@@ -66,6 +66,22 @@ resource "google_cloud_run_v2_service" "polymnemo" {
         value = var.api_keys
       }
 
+      # OAuth env, only when configured. oauth_base_url is required rather than
+      # derived: a Cloud Run URL carries a project-specific hash that doesn't
+      # exist until the service does.
+      dynamic "env" {
+        for_each = var.oauth_client_id == "" ? {} : {
+          POLYMNEMO_OAUTH_CLIENT_ID             = var.oauth_client_id
+          POLYMNEMO_OAUTH_CLIENT_SECRET         = var.oauth_client_secret
+          POLYMNEMO_OAUTH_BASE_URL              = var.oauth_base_url
+          POLYMNEMO_OAUTH_ALLOWED_REDIRECT_URIS = var.oauth_allowed_redirect_uris
+        }
+        content {
+          name  = env.key
+          value = env.value
+        }
+      }
+
       # Media/blob env only when R2 is wired in (blob_backend = "s3"); absent
       # otherwise, so the app keeps the media tools off.
       dynamic "env" {

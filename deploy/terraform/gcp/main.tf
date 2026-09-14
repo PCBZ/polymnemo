@@ -54,6 +54,11 @@ module "cloud_run" {
   database_url    = data.terraform_remote_state.neon.outputs.connection_uri_pooler
   api_keys        = var.api_keys
 
+  oauth_client_id             = var.oauth_client_id
+  oauth_client_secret         = var.oauth_client_secret
+  oauth_base_url              = var.oauth_base_url
+  oauth_allowed_redirect_uris = var.oauth_allowed_redirect_uris
+
   # Media/blob wiring — always on, from the shared r2/ root.
   blob_backend           = "s3"
   blob_bucket            = data.terraform_remote_state.r2.outputs.bucket
