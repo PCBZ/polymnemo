@@ -47,6 +47,18 @@ resource "azurerm_container_app" "this" {
     value = var.api_keys
   }
 
+  # OAuth client secret, only when OAuth is configured. A Container App secret
+  # cannot hold an empty value, so this block has to disappear rather than pass "".
+  dynamic "secret" {
+    for_each = var.oauth_client_id == "" ? {} : {
+      "oauth-client-secret" = var.oauth_client_secret
+    }
+    content {
+      name  = secret.key
+      value = secret.value
+    }
+  }
+
   # R2 S3 credentials as secrets (only when media is enabled).
   dynamic "secret" {
     for_each = var.blob_backend == "none" ? {} : {
@@ -100,6 +112,33 @@ resource "azurerm_container_app" "this" {
       env {
         name        = "POLYMNEMO_API_KEYS"
         secret_name = "api-keys"
+      }
+
+      # OAuth env, matched to the secret above. The base URL is this app's own
+      # public origin, so the callback lands back here at /auth/callback — built
+      # from the ENVIRONMENT's default domain, not from this resource's own
+      # ingress.fqdn, which would be a self-reference and a dependency cycle.
+      dynamic "env" {
+        for_each = var.oauth_client_id == "" ? {} : {
+          POLYMNEMO_OAUTH_CLIENT_ID = var.oauth_client_id
+          POLYMNEMO_OAUTH_BASE_URL = join("", [
+            "https://", var.service_name, ".",
+            azurerm_container_app_environment.this.default_domain,
+          ])
+        }
+        content {
+          name  = env.key
+          value = env.value
+        }
+      }
+      dynamic "env" {
+        for_each = var.oauth_client_id == "" ? {} : {
+          POLYMNEMO_OAUTH_CLIENT_SECRET = "oauth-client-secret"
+        }
+        content {
+          name        = env.key
+          secret_name = env.value
+        }
       }
 
       # Media/blob env only when R2 is wired in. Non-secret settings as plain

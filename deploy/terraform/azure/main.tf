@@ -46,6 +46,8 @@ module "container_apps" {
   revision_suffix     = var.revision_suffix
   database_url        = data.terraform_remote_state.neon.outputs.connection_uri_pooler
   api_keys            = var.api_keys
+  oauth_client_id     = var.oauth_client_id
+  oauth_client_secret = var.oauth_client_secret
 
   # Media/blob wiring — always on, from the shared r2/ root.
   blob_backend           = "s3"

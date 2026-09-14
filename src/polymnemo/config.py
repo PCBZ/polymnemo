@@ -130,8 +130,23 @@ class Settings(BaseSettings):
     # --- Auth ----------------------------------------------------------------
     # "bearer" (per-user keys, the real scheme) or "static" (dev, single user).
     auth_backend: str = "bearer"
+    # GitHub OAuth (#83), so users self-provision instead of the maintainer
+    # hand-editing a secret per person. Set all three to enable it; bearer keys
+    # keep working alongside, for CI and clients with weak OAuth support.
+    # oauth_base_url is this deployment's PUBLIC origin — the OAuth app's
+    # callback must be <oauth_base_url>/auth/callback.
+    oauth_client_id: str = ""
+    oauth_client_secret: str = ""
+    oauth_base_url: str = ""
     # Per-user keys as "key1:alice,key2:bob" (env POLYMNEMO_API_KEYS).
     api_keys: str = ""
+
+    @property
+    def oauth_enabled(self) -> bool:
+        """OAuth needs all three: a client pair, and the origin to call back to."""
+        return bool(
+            self.oauth_client_id and self.oauth_client_secret and self.oauth_base_url
+        )
 
     def parse_api_keys(self) -> dict[str, str]:
         """Parse ``api_keys`` into an ``{api_key: user_id}`` map."""

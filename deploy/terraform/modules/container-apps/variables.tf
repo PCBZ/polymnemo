@@ -36,6 +36,21 @@ variable "api_keys" {
   description = "Per-user keys \"key1:alice,key2:bob\", injected as POLYMNEMO_API_KEYS."
 }
 
+# GitHub OAuth (#83). Leave both blank to run bearer-key auth only; the app
+# enables OAuth exactly when the id, the secret and a base URL are all present.
+variable "oauth_client_id" {
+  type        = string
+  default     = ""
+  description = "GitHub OAuth app client id, injected as POLYMNEMO_OAUTH_CLIENT_ID."
+}
+
+variable "oauth_client_secret" {
+  type        = string
+  sensitive   = true
+  default     = ""
+  description = "GitHub OAuth app client secret, injected as POLYMNEMO_OAUTH_CLIENT_SECRET."
+}
+
 variable "log_level" {
   type        = string
   default     = "INFO"

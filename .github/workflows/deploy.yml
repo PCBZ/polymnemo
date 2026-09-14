@@ -45,6 +45,10 @@ env:
   TF_VAR_neon_api_key: ${{ secrets.NEON_API_KEY }}
   TF_VAR_cf_account_id: ${{ secrets.CF_ACCOUNT_ID }}
   TF_VAR_api_keys: ${{ secrets.POLYMNEMO_API_KEYS }}
+  # GitHub OAuth (#83). Unset secrets resolve to "", which leaves the app on
+  # bearer-only auth — so this is safe before the OAuth app is registered.
+  TF_VAR_oauth_client_id: ${{ secrets.POLYMNEMO_OAUTH_CLIENT_ID }}
+  TF_VAR_oauth_client_secret: ${{ secrets.POLYMNEMO_OAUTH_CLIENT_SECRET }}
   TF_VAR_azure_subscription_id: ${{ secrets.ARM_SUBSCRIPTION_ID }}
   TF_VAR_tfstate_resource_group: ${{ vars.TFSTATE_RESOURCE_GROUP }}
   TF_VAR_tfstate_storage_account: ${{ vars.TFSTATE_STORAGE_ACCOUNT }}

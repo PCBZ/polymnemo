@@ -20,6 +20,30 @@ from .tooling import current_user, rate_limited, tool_errors
 
 logger = logging.getLogger("polymnemo")
 
+
+def _build_auth_provider():
+    """The FastMCP auth provider, or None to leave the transport unauthenticated.
+
+    None means polymnemo's own ``Auth`` layer does all the work (bearer keys read
+    from the header, as before #83). A provider means FastMCP verifies first and
+    ``TokenSubjectAuth`` reads the result.
+
+    Imported lazily so the OAuth stack is only pulled in when it's configured.
+    """
+    if not settings.oauth_enabled:
+        return None
+    from .auth import GitHubOAuthProvider
+
+    return GitHubOAuthProvider(
+        client_id=settings.oauth_client_id,
+        client_secret=settings.oauth_client_secret,
+        base_url=settings.oauth_base_url,
+        # Bearer keys stay valid alongside OAuth, so CI and weak-OAuth clients
+        # keep working; without this they'd 401 at the transport layer.
+        static_keys=settings.parse_api_keys(),
+    )
+
+
 mcp: FastMCP = FastMCP(
     name="polymnemo",
     version=__version__,
@@ -27,6 +51,7 @@ mcp: FastMCP = FastMCP(
         "Shared long-term memory across any LLM. Authenticate with a per-user "
         "bearer key; use `remember` to store and `recall` to search semantically."
     ),
+    auth=_build_auth_provider(),
 )
 
 

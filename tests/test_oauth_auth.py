@@ -1,0 +1,91 @@
+"""GitHub OAuth auth (#83): the bearer fallback, and the identity bridge.
+
+The point of these tests is the *coexistence*. `FastMCP(auth=...)` enforces at
+the transport layer, so if `verify_token` stopped falling back to the static key
+table, every non-OAuth client would start getting 401s — a regression that no
+other test would catch.
+"""
+
+from __future__ import annotations
+
+import pytest
+
+from polymnemo.auth import AuthError, TokenSubjectAuth
+from polymnemo.auth.oauth import BEARER_CLIENT_ID, GitHubOAuthProvider
+
+
+@pytest.fixture
+def provider() -> GitHubOAuthProvider:
+    return GitHubOAuthProvider(
+        client_id="test-client",
+        client_secret="test-secret",
+        base_url="https://example.test",
+        static_keys={"sk-alice": "alice"},
+    )
+
+
+async def _no_oauth(self, token: str):
+    """Stand in for an upstream that recognises nothing, so the fallback runs."""
+    return None
+
+
+class TestBearerFallback:
+    async def test_known_static_key_authenticates(self, provider, monkeypatch):
+        monkeypatch.setattr(GitHubOAuthProvider.__bases__[0], "verify_token", _no_oauth)
+        token = await provider.verify_token("sk-alice")
+        assert token is not None
+        assert token.subject == "alice"
+        assert token.client_id == BEARER_CLIENT_ID
+
+    async def test_unknown_token_is_rejected(self, provider, monkeypatch):
+        monkeypatch.setattr(GitHubOAuthProvider.__bases__[0], "verify_token", _no_oauth)
+        # None is what makes FastMCP answer 401 — not an exception.
+        assert await provider.verify_token("sk-nope") is None
+
+    async def test_oauth_wins_when_upstream_recognises_the_token(
+        self, provider, monkeypatch
+    ):
+        """A GitHub-issued token must not be shadowed by the static table."""
+        from fastmcp.server.dependencies import AccessToken
+
+        async def _oauth_ok(self, token: str):
+            return AccessToken(
+                token=token, client_id="github", scopes=[], subject="12345"
+            )
+
+        monkeypatch.setattr(GitHubOAuthProvider.__bases__[0], "verify_token", _oauth_ok)
+        # Deliberately a key that IS in the static table.
+        token = await provider.verify_token("sk-alice")
+        assert token.subject == "12345"
+        assert token.client_id == "github"
+
+
+class TestTokenSubjectAuth:
+    def test_oauth_subject_is_namespaced(self, monkeypatch):
+        from fastmcp.server.dependencies import AccessToken
+
+        monkeypatch.setattr(
+            "polymnemo.auth.oauth.get_access_token",
+            lambda: AccessToken(
+                token="t", client_id="github", scopes=[], subject="12345"
+            ),
+        )
+        assert TokenSubjectAuth().authenticate({}) == "github:12345"
+
+    def test_bearer_subject_is_left_alone(self, monkeypatch):
+        """Bearer subjects are already polymnemo user ids — prefixing them would
+        orphan every memory written before OAuth existed."""
+        from fastmcp.server.dependencies import AccessToken
+
+        monkeypatch.setattr(
+            "polymnemo.auth.oauth.get_access_token",
+            lambda: AccessToken(
+                token="t", client_id=BEARER_CLIENT_ID, scopes=[], subject="alice"
+            ),
+        )
+        assert TokenSubjectAuth().authenticate({}) == "alice"
+
+    def test_no_token_raises(self, monkeypatch):
+        monkeypatch.setattr("polymnemo.auth.oauth.get_access_token", lambda: None)
+        with pytest.raises(AuthError):
+            TokenSubjectAuth().authenticate({})
