@@ -32,7 +32,7 @@ def _build_auth_provider():
     """
     if not settings.oauth_enabled:
         return None
-    from .auth import GitHubOAuthProvider
+    from .auth.oauth import GitHubOAuthProvider, build_client_storage
 
     return GitHubOAuthProvider(
         client_id=settings.oauth_client_id,
@@ -41,6 +41,9 @@ def _build_auth_provider():
         # Bearer keys stay valid alongside OAuth, so CI and weak-OAuth clients
         # keep working; without this they'd 401 at the transport layer.
         static_keys=settings.parse_api_keys(),
+        # A login spans four requests; Container Apps round-robins them across
+        # replicas, so the flow state has to be shared, not on local disk.
+        client_storage=build_client_storage(settings.database_url),
     )
 
 

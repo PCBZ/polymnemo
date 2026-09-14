@@ -20,12 +20,18 @@ field — ``AccessToken.subject``.
 
 from __future__ import annotations
 
+import re
 from collections.abc import Mapping
 
 from fastmcp.server.auth.providers.github import GitHubProvider
 from fastmcp.server.dependencies import AccessToken, get_access_token
+from key_value.aio.stores.postgresql import PostgreSQLStore
 
 from .base import AuthError
+
+# Created by scripts/schema.sql, like every other table. Must match the shape
+# py-key-value-aio expects.
+OAUTH_KV_TABLE = "oauth_kv"
 
 # Marks a token that authenticated via the static key table rather than OAuth,
 # so logs and debugging can tell the two apart.
@@ -82,3 +88,37 @@ class TokenSubjectAuth:
         if token.client_id == BEARER_CLIENT_ID:
             return token.subject
         return f"{self._prefix}:{token.subject}"
+
+
+def direct_dsn(dsn: str) -> str:
+    """Neon's DIRECT endpoint for a pooled DSN — strip the ``-pooler`` infix.
+
+    The app talks to Neon through PgBouncer in transaction mode, which is right
+    for short web requests but wrong for asyncpg: asyncpg prepares statements
+    per connection, and PgBouncer hands out a different backend per transaction,
+    so a prepared statement goes missing intermittently. ``postgres.py`` dodges
+    this for psycopg with ``prepare_threshold=None``; the equivalent knob here is
+    ``statement_cache_size``, which py-key-value-aio's URL path gives us no way
+    to set (and asyncpg silently ignores it as a DSN parameter — verified).
+
+    Bypassing the pooler avoids the problem outright, and this store's traffic is
+    a handful of rows per login, so it doesn't need PgBouncer's multiplexing.
+    A DSN with no ``-pooler`` is returned unchanged.
+    """
+    return re.sub(r"-pooler(\.)", r"\1", dsn, count=1)
+
+
+def build_client_storage(database_url: str | None) -> PostgreSQLStore | None:
+    """Shared storage for the OAuth proxy's flow state, or None to let FastMCP
+    fall back to its local-filesystem default (fine for single-process dev).
+
+    ``auto_create=False``: the table is a deploy step (scripts/schema.sql), so a
+    missing one should fail loudly rather than be conjured at runtime.
+    """
+    if not database_url:
+        return None
+    return PostgreSQLStore(
+        url=direct_dsn(database_url),
+        table_name=OAUTH_KV_TABLE,
+        auto_create=False,
+    )

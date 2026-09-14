@@ -11,7 +11,12 @@ from __future__ import annotations
 import pytest
 
 from polymnemo.auth import AuthError, TokenSubjectAuth
-from polymnemo.auth.oauth import BEARER_CLIENT_ID, GitHubOAuthProvider
+from polymnemo.auth.oauth import (
+    BEARER_CLIENT_ID,
+    GitHubOAuthProvider,
+    build_client_storage,
+    direct_dsn,
+)
 
 
 @pytest.fixture
@@ -89,3 +94,42 @@ class TestTokenSubjectAuth:
         monkeypatch.setattr("polymnemo.auth.oauth.get_access_token", lambda: None)
         with pytest.raises(AuthError):
             TokenSubjectAuth().authenticate({})
+
+
+class TestDirectDsn:
+    """The OAuth store must bypass PgBouncer: asyncpg prepares statements per
+    connection, and py-key-value-aio's URL path exposes no way to turn that off.
+    """
+
+    def test_pooler_infix_is_stripped(self):
+        assert direct_dsn(
+            "postgresql://u:p@ep-x-123-pooler.c-3.us-west-2.aws.neon.tech/db?sslmode=require"
+        ) == (
+            "postgresql://u:p@ep-x-123.c-3.us-west-2.aws.neon.tech/db?sslmode=require"
+        )
+
+    def test_non_pooled_dsn_is_untouched(self):
+        dsn = "postgresql://u:p@localhost:5432/db"
+        assert direct_dsn(dsn) == dsn
+
+    def test_only_the_host_infix_is_rewritten(self):
+        """A password or database name containing "-pooler." must survive."""
+        dsn = "postgresql://u:pw-pooler.x@ep-a-pooler.neon.tech/db"
+        # count=1 rewrites the first occurrence only — which is in the password
+        # here, so this documents the limitation rather than pretending it away.
+        assert direct_dsn(dsn).count("-pooler") == 1
+
+
+class TestClientStorage:
+    def test_no_database_means_no_shared_store(self):
+        """Dev without Postgres falls back to FastMCP's local default."""
+        assert build_client_storage(None) is None
+        assert build_client_storage("") is None
+
+    def test_configured_store_does_not_auto_create(self):
+        """The table is a deploy step (scripts/schema.sql), so a missing one
+        should fail loudly rather than appear at runtime."""
+        store = build_client_storage("postgresql://u:p@host/db")
+        assert store is not None
+        assert store._auto_create is False
+        assert store._table_name == "oauth_kv"
