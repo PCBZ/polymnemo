@@ -150,6 +150,10 @@ class Settings(BaseSettings):
     oauth_client_id: str = ""
     oauth_client_secret: str = ""
     oauth_base_url: str = ""
+    # Extra client redirect-URI patterns, comma-separated. ADDED to the
+    # localhost-only default, never replacing it, so a bad value can't widen the
+    # floor. Needed for hosted MCP clients, which don't use a loopback callback.
+    oauth_allowed_redirect_uris: str = ""
     # Per-user keys as "key1:alice,key2:bob" (env POLYMNEMO_API_KEYS).
     api_keys: str = ""
 
@@ -159,6 +163,12 @@ class Settings(BaseSettings):
         return bool(
             self.oauth_client_id and self.oauth_client_secret and self.oauth_base_url
         )
+
+    def parse_allowed_redirect_uris(self) -> list[str]:
+        """Extra redirect-URI patterns as a list (see the field's note)."""
+        return [
+            u.strip() for u in self.oauth_allowed_redirect_uris.split(",") if u.strip()
+        ]
 
     def parse_api_keys(self) -> dict[str, str]:
         """Parse ``api_keys`` into an ``{api_key: user_id}`` map."""

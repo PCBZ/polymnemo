@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import pytest
 from fastmcp.server.auth.providers.github import GitHubProvider
+from pydantic import ValidationError
 
 from polymnemo.auth import AuthError, TokenSubjectAuth
 from polymnemo.auth.oauth import (
@@ -17,6 +18,7 @@ from polymnemo.auth.oauth import (
     _build_client_storage,
     direct_dsn,
 )
+from polymnemo.config import Settings
 
 
 @pytest.fixture
@@ -135,3 +137,62 @@ class TestClientStorage:
         assert store is not None
         assert store._auto_create is False
         assert store._table_name == "oauth_kv"
+
+
+class TestAuthConfig:
+    def test_static_auth_with_oauth_is_rejected(self):
+        """Left unguarded, the transport would enforce OAuth while StaticAuth
+        returned one user_id for everyone through it."""
+        with pytest.raises(ValidationError, match="incompatible with OAuth"):
+            Settings(
+                auth_backend="static",
+                oauth_client_id="id",
+                oauth_client_secret="secret",
+                oauth_base_url="https://example.test",
+            )
+
+    def test_static_auth_without_oauth_is_fine(self):
+        assert Settings(auth_backend="static").auth_backend == "static"
+
+    def test_oauth_needs_all_three_settings(self):
+        # auth_backend is explicit because conftest sets it to "static" for the
+        # suite, which _check_auth rightly refuses to combine with OAuth.
+        assert not Settings(auth_backend="bearer", oauth_client_id="id").oauth_enabled
+        assert Settings(
+            auth_backend="bearer",
+            oauth_client_id="id",
+            oauth_client_secret="secret",
+            oauth_base_url="https://example.test",
+        ).oauth_enabled
+
+
+class TestAllowedRedirectUris:
+    """Extra patterns extend the localhost floor; they never replace it."""
+
+    def test_empty_by_default(self):
+        assert Settings().parse_allowed_redirect_uris() == []
+
+    def test_parsed_and_trimmed(self):
+        s = Settings(
+            oauth_allowed_redirect_uris=" https://a.test/cb , https://b.test/* "
+        )
+        assert s.parse_allowed_redirect_uris() == [
+            "https://a.test/cb",
+            "https://b.test/*",
+        ]
+
+    def test_localhost_floor_survives_extras(self):
+        from fastmcp.server.auth.redirect_validation import (
+            DEFAULT_LOCALHOST_PATTERNS,
+            validate_redirect_uri,
+        )
+
+        allowed = (
+            DEFAULT_LOCALHOST_PATTERNS
+            + Settings(
+                oauth_allowed_redirect_uris="https://hosted.test/cb"
+            ).parse_allowed_redirect_uris()
+        )
+        assert validate_redirect_uri("http://localhost:33418/cb", allowed)
+        assert validate_redirect_uri("https://hosted.test/cb", allowed)
+        assert not validate_redirect_uri("https://attacker.test/cb", allowed)

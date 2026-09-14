@@ -58,9 +58,6 @@ class TokenSubjectAuth:
     Ignores ``headers``: re-parsing the credential here would trust it twice.
     """
 
-    def __init__(self, provider_prefix: str = "github") -> None:
-        self._prefix = provider_prefix
-
     def authenticate(self, headers: Mapping[str, str]) -> str:
         token = get_access_token()
         if token is None or not token.subject:
@@ -69,7 +66,7 @@ class TokenSubjectAuth:
         # need namespacing, so a GitHub `sub` can't collide with a chosen name.
         if token.client_id == BEARER_CLIENT_ID:
             return token.subject
-        return f"{self._prefix}:{token.subject}"
+        return f"github:{token.subject}"
 
 
 def direct_dsn(dsn: str) -> str:

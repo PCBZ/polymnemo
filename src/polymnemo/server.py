@@ -44,9 +44,11 @@ def _build_auth_provider():
         client_storage=_build_client_storage(settings.database_url),
         # MUST be set: DCR lets a client register any redirect URI, and the
         # upstream default accepts all of them — an attacker could collect a
-        # victim's authorization code. Localhost-only fits real MCP clients; a
-        # hosted one has to be added here deliberately.
-        allowed_client_redirect_uris=DEFAULT_LOCALHOST_PATTERNS,
+        # victim's authorization code. Localhost covers clients that listen on a
+        # loopback port; hosted ones are opted in by config, never by default.
+        allowed_client_redirect_uris=(
+            DEFAULT_LOCALHOST_PATTERNS + settings.parse_allowed_redirect_uris()
+        ),
         # Else every tool call re-validates upstream: a GET api.github.com/user
         # per recall, burning latency and the 5000/hr token budget.
         cache_ttl_seconds=300,
