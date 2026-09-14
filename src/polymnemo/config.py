@@ -11,6 +11,8 @@ skeleton carries. Later issues extend this (database URL in #2/#6, API keys in
 
 from __future__ import annotations
 
+from urllib.parse import urlparse
+
 from pydantic import AliasChoices, Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -115,6 +117,27 @@ class Settings(BaseSettings):
                 "(every caller would collapse to one user_id). Unset "
                 "AUTH_BACKEND, or clear the POLYMNEMO_OAUTH_* credentials."
             )
+        return self
+
+    @model_validator(mode="after")
+    def _check_redirect_uri_patterns(self) -> Settings:
+        """Reject malformed redirect-URI patterns at startup.
+
+        These feed a security allowlist, and a bad one fails *closed*: it matches
+        nothing, so the operator believes a client is allowed and only finds out
+        when someone can't log in, from an error that names the client rather
+        than the config. Checking the scheme too, since "htts://host/cb" has a
+        perfectly good host and would otherwise slip through.
+        """
+        for pattern in self.parse_allowed_redirect_uris():
+            parsed = urlparse(pattern)
+            if parsed.scheme not in ("http", "https") or not parsed.netloc:
+                raise ValueError(
+                    f"POLYMNEMO_OAUTH_ALLOWED_REDIRECT_URIS entry {pattern!r} is "
+                    "not a usable pattern (needs an http/https scheme and a "
+                    "host, e.g. https://inspector.example.com/oauth/callback). "
+                    "It would never match a client."
+                )
         return self
 
     @model_validator(mode="after")

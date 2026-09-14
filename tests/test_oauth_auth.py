@@ -167,19 +167,39 @@ class TestAuthConfig:
 
 
 class TestAllowedRedirectUris:
-    """Extra patterns extend the localhost floor; they never replace it."""
+    """Extra patterns extend the localhost floor; they never replace it.
+
+    auth_backend is explicit throughout: conftest sets it to "static" for the
+    suite, so a runner that also had the OAuth credentials set would trip
+    _check_auth and fail these with an error about something else entirely.
+    """
 
     def test_empty_by_default(self):
-        assert Settings().parse_allowed_redirect_uris() == []
+        assert Settings(auth_backend="bearer").parse_allowed_redirect_uris() == []
 
     def test_parsed_and_trimmed(self):
         s = Settings(
-            oauth_allowed_redirect_uris=" https://a.test/cb , https://b.test/* "
+            auth_backend="bearer",
+            oauth_allowed_redirect_uris=" https://a.test/cb , https://b.test/* ",
         )
         assert s.parse_allowed_redirect_uris() == [
             "https://a.test/cb",
             "https://b.test/*",
         ]
+
+    def test_malformed_patterns_are_rejected(self):
+        """A bad pattern fails closed — it matches nothing — so the operator
+        would otherwise learn about it from a user who cannot log in."""
+        for bad in ("htts://typo.test/cb", "https://", "localhost"):
+            with pytest.raises(ValidationError, match="not a usable pattern"):
+                Settings(auth_backend="bearer", oauth_allowed_redirect_uris=bad)
+
+    def test_wildcard_patterns_are_accepted(self):
+        s = Settings(
+            auth_backend="bearer",
+            oauth_allowed_redirect_uris="https://*.example.com/*",
+        )
+        assert s.parse_allowed_redirect_uris() == ["https://*.example.com/*"]
 
     def test_localhost_floor_survives_extras(self):
         from fastmcp.server.auth.redirect_validation import (

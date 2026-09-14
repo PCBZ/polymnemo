@@ -38,16 +38,17 @@ data "terraform_remote_state" "r2" {
 }
 
 module "container_apps" {
-  source              = "../modules/container-apps"
-  resource_group_name = var.resource_group_name
-  location            = var.location
-  service_name        = var.service_name
-  image               = var.image
-  revision_suffix     = var.revision_suffix
-  database_url        = data.terraform_remote_state.neon.outputs.connection_uri_pooler
-  api_keys            = var.api_keys
-  oauth_client_id     = var.oauth_client_id
-  oauth_client_secret = var.oauth_client_secret
+  source                      = "../modules/container-apps"
+  resource_group_name         = var.resource_group_name
+  location                    = var.location
+  service_name                = var.service_name
+  image                       = var.image
+  revision_suffix             = var.revision_suffix
+  database_url                = data.terraform_remote_state.neon.outputs.connection_uri_pooler
+  api_keys                    = var.api_keys
+  oauth_client_id             = var.oauth_client_id
+  oauth_client_secret         = var.oauth_client_secret
+  oauth_allowed_redirect_uris = var.oauth_allowed_redirect_uris
 
   # Media/blob wiring — always on, from the shared r2/ root.
   blob_backend           = "s3"

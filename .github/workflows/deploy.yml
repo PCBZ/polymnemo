@@ -49,6 +49,9 @@ env:
   # bearer-only auth — so this is safe before the OAuth app is registered.
   TF_VAR_oauth_client_id: ${{ secrets.POLYMNEMO_OAUTH_CLIENT_ID }}
   TF_VAR_oauth_client_secret: ${{ secrets.POLYMNEMO_OAUTH_CLIENT_SECRET }}
+  # A variable, not a secret: these are public callback URLs, and being able to
+  # read them back is what lets an operator confirm what's actually allowed.
+  TF_VAR_oauth_allowed_redirect_uris: ${{ vars.POLYMNEMO_OAUTH_ALLOWED_REDIRECT_URIS }}
   TF_VAR_azure_subscription_id: ${{ secrets.ARM_SUBSCRIPTION_ID }}
   TF_VAR_tfstate_resource_group: ${{ vars.TFSTATE_RESOURCE_GROUP }}
   TF_VAR_tfstate_storage_account: ${{ vars.TFSTATE_STORAGE_ACCOUNT }}

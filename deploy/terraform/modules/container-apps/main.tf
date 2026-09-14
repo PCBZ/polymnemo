@@ -120,7 +120,8 @@ resource "azurerm_container_app" "this" {
       # ingress.fqdn, which would be a self-reference and a dependency cycle.
       dynamic "env" {
         for_each = var.oauth_client_id == "" ? {} : {
-          POLYMNEMO_OAUTH_CLIENT_ID = var.oauth_client_id
+          POLYMNEMO_OAUTH_CLIENT_ID             = var.oauth_client_id
+          POLYMNEMO_OAUTH_ALLOWED_REDIRECT_URIS = var.oauth_allowed_redirect_uris
           POLYMNEMO_OAUTH_BASE_URL = join("", [
             "https://", var.service_name, ".",
             azurerm_container_app_environment.this.default_domain,

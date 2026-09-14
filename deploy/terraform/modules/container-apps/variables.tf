@@ -51,6 +51,12 @@ variable "oauth_client_secret" {
   description = "GitHub OAuth app client secret, injected as POLYMNEMO_OAUTH_CLIENT_SECRET."
 }
 
+variable "oauth_allowed_redirect_uris" {
+  type        = string
+  default     = ""
+  description = "Comma-separated extra client redirect-URI patterns. Added to the localhost-only default, never replacing it."
+}
+
 variable "log_level" {
   type        = string
   default     = "INFO"
