@@ -44,6 +44,17 @@ class TestBearerFallback:
         assert token.subject == "alice"
         assert token.client_id == BEARER_CLIENT_ID
 
+    async def test_synthesized_token_carries_required_scopes(
+        self, provider, monkeypatch
+    ):
+        """Reached production: the transport enforces required_scopes *after*
+        verify_token returns, so a token with none gets insufficient_scope and
+        every bearer caller is locked out. Asserting only the return value —
+        as the other tests here do — cannot see that."""
+        monkeypatch.setattr(GitHubProvider, "verify_token", _no_oauth)
+        token = await provider.verify_token("sk-alice")
+        assert set(provider.required_scopes or []) <= set(token.scopes)
+
     async def test_unknown_token_is_rejected(self, provider, monkeypatch):
         monkeypatch.setattr(GitHubProvider, "verify_token", _no_oauth)
         # None is what makes FastMCP answer 401 — not an exception.

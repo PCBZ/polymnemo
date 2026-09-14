@@ -46,7 +46,12 @@ class GitHubOAuthProvider(GitHubProvider):
         return AccessToken(
             token=token,
             client_id=BEARER_CLIENT_ID,
-            scopes=[],
+            # The transport layer enforces required_scopes AFTER this returns,
+            # so an empty list means insufficient_scope and the caller is locked
+            # out. Bearer keys have no GitHub scopes; carry whatever the provider
+            # demands, read from it rather than hardcoded so changing
+            # required_scopes can't quietly break this path again.
+            scopes=list(self.required_scopes or []),
             subject=user_id,
             claims={"scheme": "bearer"},
         )
