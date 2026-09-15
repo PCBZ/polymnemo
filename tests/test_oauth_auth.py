@@ -227,3 +227,45 @@ class TestAllowedRedirectUris:
         assert validate_redirect_uri("http://localhost:33418/cb", allowed)
         assert validate_redirect_uri("https://hosted.test/cb", allowed)
         assert not validate_redirect_uri("https://attacker.test/cb", allowed)
+
+
+class TestPrefixGate:
+    """A token without the `pmn_` prefix cannot be one of ours, so it must not
+    cost a hash and a database round-trip."""
+
+    class _CountingStore:
+        def __init__(self) -> None:
+            self.calls: list[str] = []
+
+        def resolve(self, token: str) -> str | None:
+            self.calls.append(token)
+            return None
+
+    def _provider(self, store):
+        return GitHubOAuthProvider(
+            client_id="test-client",
+            client_secret="test-secret",
+            base_url="https://example.test",
+            token_store=store,
+        )
+
+    async def test_token_without_the_prefix_never_reaches_the_store(self, monkeypatch):
+        monkeypatch.setattr(GitHubProvider, "verify_token", _no_oauth)
+        store = self._CountingStore()
+        assert await self._provider(store).verify_token("random-garbage") is None
+        assert store.calls == []
+
+    async def test_token_with_the_prefix_is_looked_up(self, monkeypatch):
+        monkeypatch.setattr(GitHubProvider, "verify_token", _no_oauth)
+        store = self._CountingStore()
+        assert await self._provider(store).verify_token("pmn_whatever") is None
+        assert store.calls == ["pmn_whatever"]
+
+
+class TestEnginePropertyIsPublic:
+    def test_postgres_store_exposes_engine(self):
+        """`_token_store()` reads `.engine`; if that became private again the
+        lookup would return None and tokens would quietly stop working."""
+        from polymnemo.store.postgres import PostgresStore
+
+        assert isinstance(PostgresStore.engine, property)

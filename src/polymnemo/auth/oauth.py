@@ -8,6 +8,7 @@ took, the ``user_id`` arrives as ``AccessToken.subject``.
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Mapping
 from urllib.parse import urlparse, urlunparse
 
@@ -16,9 +17,13 @@ from fastmcp.server.dependencies import AccessToken, get_access_token
 from key_value.aio.stores.postgresql import PostgreSQLStore
 
 from .base import AuthError
+from .tokens import TOKEN_PREFIX, ApiTokenStore
 
 # Created by scripts/schema.sql; shape must match what py-key-value-aio expects.
 OAUTH_KV_TABLE = "oauth_kv"
+
+# Shared with web.py: renaming one side alone would silently split identities.
+GITHUB_SUBJECT_PREFIX = "github:"
 # Marks a token that came from the static key table rather than OAuth.
 BEARER_CLIENT_ID = "static-bearer"
 
@@ -31,18 +36,36 @@ class GitHubOAuthProvider(GitHubProvider):
     schemes can live, hence the only override.
     """
 
-    def __init__(self, *args, static_keys: Mapping[str, str] | None = None, **kwargs):
+    def __init__(
+        self,
+        *args,
+        static_keys: Mapping[str, str] | None = None,
+        token_store: ApiTokenStore | None = None,
+        **kwargs,
+    ):
         super().__init__(*args, **kwargs)
         # {api_key -> user_id}; empty means OAuth is the only way in.
         self._static_keys = dict(static_keys or {})
+        # Self-service tokens (#125). None when there's no database.
+        self._token_store = token_store
 
     async def verify_token(self, token: str) -> AccessToken | None:
         oauth = await super().verify_token(token)
         if oauth is not None:
             return oauth
+        # Env keys first: the escape hatch can't depend on the database.
         user_id = self._static_keys.get(token)
+        # The prefix as a gate, not just a label: anything without it cannot be
+        # one of ours, so it never costs a hash and a round-trip.
+        if (
+            user_id is None
+            and self._token_store is not None
+            and token.startswith(TOKEN_PREFIX)
+        ):
+            # Sync store, async caller: keep a slow query off the event loop.
+            user_id = await asyncio.to_thread(self._token_store.resolve, token)
         if user_id is None:
-            return None  # neither scheme recognises it -> 401
+            return None  # no scheme recognises it -> 401
         return AccessToken(
             token=token,
             client_id=BEARER_CLIENT_ID,
@@ -71,7 +94,7 @@ class TokenSubjectAuth:
         # need namespacing, so a GitHub `sub` can't collide with a chosen name.
         if token.client_id == BEARER_CLIENT_ID:
             return token.subject
-        return f"github:{token.subject}"
+        return f"{GITHUB_SUBJECT_PREFIX}{token.subject}"
 
 
 def direct_dsn(dsn: str) -> str:

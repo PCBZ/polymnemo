@@ -54,11 +54,35 @@ CREATE INDEX IF NOT EXISTS memories_session_idx
 CREATE INDEX IF NOT EXISTS memories_embedding_hnsw_idx
     ON memories USING hnsw (embedding vector_cosine_ops);
 
--- Per-user bearer keys: {api_key -> user_id}.
+-- Per-user bearer keys: {api_key -> user_id}. Superseded by api_tokens below —
+-- nothing reads this, and it stored keys in plaintext. Left in place so an
+-- existing database isn't altered by a schema re-run; drop it deliberately.
 CREATE TABLE IF NOT EXISTS api_keys (
     api_key  TEXT PRIMARY KEY,
     user_id  TEXT NOT NULL
 );
+
+-- Self-service API tokens (#125): minted by an authenticated user so headless
+-- clients — CI, cron, server-side agents — have a credential, since OAuth's
+-- authorization-code flow needs a browser and a human.
+--
+-- Only the SHA-256 of a token is stored, so a leak of this table does not yield
+-- usable credentials and the token itself is unrecoverable after creation.
+-- SHA-256 rather than bcrypt/argon2 on purpose: those slow down brute force on
+-- LOW-entropy secrets, while these are 256 bits of randomness with nothing to
+-- guess — and a slow hash would sit in the path of every authenticated request.
+CREATE TABLE IF NOT EXISTS api_tokens (
+    id          TEXT PRIMARY KEY,
+    user_id     TEXT NOT NULL,
+    token_hash  TEXT NOT NULL UNIQUE,
+    label       TEXT NOT NULL,
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+    expires_at  TIMESTAMPTZ
+);
+
+-- Auth looks a token up by its hash on every request; listing and revoking are
+-- owner-scoped.
+CREATE INDEX IF NOT EXISTS api_tokens_user_idx ON api_tokens (user_id);
 
 -- OAuth proxy state (#83): DCR client registrations, authorization `state`, and
 -- PKCE verifiers. Short-lived rows — every entry carries a TTL and FastMCP

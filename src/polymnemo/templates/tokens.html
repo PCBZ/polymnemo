@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>polymnemo — API tokens</title>
+<link rel="stylesheet" href="${base}/tokens/style.css">
+</head>
+<body><div class="wrap">
+
+<h1>API tokens</h1>
+<p class="meta">Signed in as <code>${user_id}</code>. Tokens let headless
+clients — CI, cron jobs, server-side agents — reach this server: they cannot
+sign in with a browser, so you create a token here and give it to them.</p>
+
+<div class="card"${reveal_hidden}>
+  <strong>Your new token</strong>
+  <code class="secret">${fresh}</code>
+  <p class="warn">Copy it now — it is stored only as a hash and cannot be shown again.</p>
+</div>
+
+<div class="card">
+  <form method="post" action="${base}/tokens/create">
+    <input type="hidden" name="csrf" value="${csrf}">
+    <div class="row">
+      <input name="label" placeholder="What is it for? e.g. ci" required maxlength="60">
+      <span class="row tight">
+        <input name="expires_days" type="number" value="90" min="1" max="365"
+               class="days" aria-label="Days until it expires">
+        <span class="meta flush">days</span>
+      </span>
+      <button>Create token</button>
+    </div>
+  </form>
+</div>
+
+<div class="card">
+  <table>
+    <tr><th>Label</th><th>Created</th><th>Expires</th><th></th></tr>
+    ${rows}
+    <tr${empty_hidden}><td colspan="4" class="meta">No tokens yet.</td></tr>
+  </table>
+</div>
+
+<p class="meta">Use a token as <code>Authorization: Bearer &lt;token&gt;</code>.</p>
+
+</div></body>
+</html>

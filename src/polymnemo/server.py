@@ -11,14 +11,28 @@ service in ``app``.
 from __future__ import annotations
 
 import logging
+from functools import lru_cache
 
 from fastmcp import FastMCP
 
-from . import __version__, app
+from . import __version__, app, web
 from .config import settings
 from .tooling import current_user, rate_limited, tool_errors
 
 logger = logging.getLogger("polymnemo")
+
+
+@lru_cache(maxsize=1)
+def _token_store():
+    """The API-token store, shared by the auth provider and the token pages.
+
+    Built here rather than held on the app context: tokens are not one of the
+    pluggable layers the MCP tools use, so nothing on that side should see them.
+    """
+    from .auth.tokens import ApiTokenStore
+
+    engine = getattr(app.ctx.store, "engine", None)
+    return ApiTokenStore(engine) if engine is not None else None
 
 
 def _build_auth_provider():
@@ -42,6 +56,8 @@ def _build_auth_provider():
         # A login spans four requests that Container Apps spreads across
         # replicas, so the flow state can't sit on local disk.
         client_storage=_build_client_storage(settings.database_url),
+        # Lets a minted token authenticate (#125). None without a database.
+        token_store=_token_store(),
         # MUST be set: DCR lets a client register any redirect URI, and the
         # upstream default accepts all of them — an attacker could collect a
         # victim's authorization code. Localhost covers clients that listen on a
@@ -66,6 +82,12 @@ mcp: FastMCP = FastMCP(
     ),
     auth=_build_auth_provider(),
 )
+
+
+# Browser pages for minting tokens (#125). Registered here so web.py doesn't
+# import this module back. Deliberately absent from the MCP tool surface: a
+# secret must never be reachable through a tool result.
+web.register(mcp, _token_store())
 
 
 @mcp.tool(annotations={"readOnlyHint": True})

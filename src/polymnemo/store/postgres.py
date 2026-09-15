@@ -123,6 +123,13 @@ class PostgresStore:
             connect_args={"prepare_threshold": None},
         )
 
+    @property
+    def engine(self):
+        """The SQLAlchemy engine, for layers that share this database (#125).
+        Public so they don't reach into a private attribute that a refactor
+        could rename without any error at startup."""
+        return self._engine
+
     def close(self) -> None:
         self._engine.dispose()
 
