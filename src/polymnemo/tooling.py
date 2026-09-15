@@ -13,6 +13,7 @@ They read the running context from ``app`` (not ``server``) to avoid a cycle.
 from __future__ import annotations
 
 import functools
+from contextvars import ContextVar
 
 from fastmcp.exceptions import ToolError
 from fastmcp.server.dependencies import get_http_headers
@@ -20,6 +21,42 @@ from fastmcp.server.dependencies import get_http_headers
 from . import app
 from .auth import AuthError
 from .ratelimit import RateLimitError
+
+# Per-request scratch space. A ContextVar so concurrent requests stay apart,
+# holding a mutable dict because rebinding is lost across a worker thread.
+_REQUEST: ContextVar[dict[str, str] | None] = ContextVar("request_scope", default=None)
+
+
+def new_request_scope() -> None:
+    """Start a request's scope. Called once per call, before the tool runs."""
+    _REQUEST.set({})
+
+
+def _scope() -> dict[str, str]:
+    """This request's scope, creating one if the caller never opened it.
+
+    ``_REQUEST.get({})`` would hand back a throwaway dict, so writing to it is a
+    no-op and the identity vanishes with no error — which is what happens to any
+    path that reaches ``current_user`` without the middleware, such as a test or
+    a background task. Binding it here makes the write land instead. The binding
+    is task-local, so this cannot leak one request's identity into another.
+    """
+    scope = _REQUEST.get(None)
+    if scope is None:
+        scope = {}
+        _REQUEST.set(scope)
+    return scope
+
+
+def current_user_id() -> str | None:
+    """The ``user_id`` this request authenticated as, or None if it never did.
+
+    Read-only: it reports what ``current_user`` resolved rather than resolving
+    again, so a caller (the call log) can name the identity without re-running
+    authentication or being able to trigger its side effects.
+    """
+    scope = _REQUEST.get(None)
+    return scope.get("user_id") if scope else None
 
 
 def current_user() -> str:
@@ -30,9 +67,11 @@ def current_user() -> str:
     # get_http_headers() strips `authorization` by default; opt it back in.
     headers = get_http_headers(include={"authorization"})
     try:
-        return app.ctx.auth.authenticate(headers)
+        user_id = app.ctx.auth.authenticate(headers)
     except AuthError as exc:
         raise ToolError(f"Authentication failed: {exc}") from exc
+    _scope()["user_id"] = user_id
+    return user_id
 
 
 def rate_limited(cost: int = 1):
