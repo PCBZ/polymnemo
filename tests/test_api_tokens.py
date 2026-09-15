@@ -177,3 +177,9 @@ class TestApiTokenStore:
         items = store.list_for_user("test-alice")
         assert [t.label for t in items] == ["a1"]
         assert not hasattr(items[0], "token")
+
+    def test_zero_days_is_not_treated_as_never(self, store):
+        """Truthiness would read 0 as "no expiry". The web layer clamps to >= 1,
+        but a direct caller would hit the inversion silently."""
+        _, meta = store.create("alice", "zero", expires_in_days=0)
+        assert meta.expires_at is not None

@@ -24,6 +24,7 @@ import json
 import logging
 import secrets
 import time
+from datetime import UTC, datetime
 from functools import cache
 from pathlib import Path
 from string import Template
@@ -38,6 +39,7 @@ from starlette.responses import (
     Response,
 )
 
+from .auth.oauth import GITHUB_SUBJECT_PREFIX
 from .auth.tokens import ApiTokenStore
 from .config import settings
 
@@ -45,8 +47,7 @@ logger = logging.getLogger("polymnemo")
 
 SESSION_COOKIE = "polymnemo_session"
 SESSION_MAX_AGE = 8 * 3600
-# The OAuth `state` parameter, held in a cookie rather than server state so the
-# callback works on whichever replica answers it.
+# The OAuth `state`, in a cookie so any replica can answer the callback.
 STATE_COOKIE = "polymnemo_oauth_state"
 GITHUB_AUTHORIZE = "https://github.com/login/oauth/authorize"
 GITHUB_TOKEN = "https://github.com/login/oauth/access_token"
@@ -54,11 +55,19 @@ GITHUB_USER = "https://api.github.com/user"
 
 
 def _secret() -> bytes:
-    """Key for signing cookies. Derived from the OAuth client secret, so every
-    replica derives the same one without another setting to configure."""
-    return hashlib.sha256(
-        f"polymnemo-web-session:{settings.oauth_client_secret}".encode()
-    ).digest()
+    """Key for signing cookies, derived from the OAuth client secret so every
+    replica agrees without another setting.
+
+    Refuses an empty secret: that key is the SHA-256 of a public constant, so
+    anyone could forge a session for any ``user_id``.
+    """
+    secret = settings.oauth_client_secret
+    if not secret:
+        raise RuntimeError(
+            "web sessions need POLYMNEMO_OAUTH_CLIENT_SECRET; "
+            "without it the signing key would be publicly derivable"
+        )
+    return hashlib.sha256(f"polymnemo-web-session:{secret}".encode()).digest()
 
 
 def _sign(payload: str) -> str:
@@ -71,8 +80,7 @@ def _unsign(value: str) -> str | None:
     if not payload or not mac:
         return None
     expected = hmac.new(_secret(), payload.encode(), hashlib.sha256).hexdigest()
-    # compare_digest, not ==: a plain comparison leaks the correct prefix length
-    # through timing, which is enough to forge a signature byte by byte.
+    # compare_digest, not ==: `==` leaks the correct prefix length via timing.
     if not hmac.compare_digest(mac, expected):
         return None
     return payload
@@ -142,16 +150,8 @@ def _set_cookie(response: Response, name: str, value: str, max_age: int) -> None
 
 
 # --- page ------------------------------------------------------------------
-# Three template files — page, row, stylesheet — not markup in string literals:
-# HTML reads as HTML, CSS is served as CSS, and this module stays about auth and
-# routing.
-#
-# `string.Template` (`${hole}`), not `str.format`: `format` reads every brace as
-# a hole, so it breaks on any template carrying CSS or script braces.
-#
-# There is one page. Not-signed-in redirects to GitHub instead of rendering a
-# landing page, and failures are plain text — an error doesn't need styling, and
-# a page per state was more files than states.
+# Markup lives in templates/. `string.Template`, not `str.format`: `format`
+# reads CSS braces as placeholders.
 _TEMPLATES = Path(__file__).parent / "templates"
 
 
@@ -162,6 +162,26 @@ def _template(name: str) -> Template:
 
 def _fail(message: str) -> Response:
     return PlainTextResponse(message, status_code=400)
+
+
+def _fail_signin(message: str) -> Response:
+    """A failed sign-in, with the one-shot `state` cookie dropped so a retry
+    starts from a clean slate instead of a stale value."""
+    response = _fail(message)
+    response.delete_cookie(STATE_COOKIE, path="/tokens")
+    return response
+
+
+def _expiry_label(expires_at: datetime | None) -> str:
+    """How a token's expiry reads in the table. Expired rows are marked — they
+    no longer resolve, and otherwise look identical to working ones."""
+    if expires_at is None:
+        return "never"
+    # Naive rows predate the tz-aware column; don't raise on a mixed compare.
+    if expires_at.tzinfo is None:
+        expires_at = expires_at.replace(tzinfo=UTC)
+    shown = expires_at.date().isoformat()
+    return f"{shown} (expired)" if expires_at <= datetime.now(UTC) else shown
 
 
 def _tokens_page(
@@ -178,7 +198,7 @@ def _tokens_page(
             rows += row.substitute(
                 label=html.escape(t.label),
                 created=t.created_at.date().isoformat(),
-                expires=t.expires_at.date().isoformat() if t.expires_at else "never",
+                expires=_expiry_label(t.expires_at),
                 base=base,
                 csrf=html.escape(csrf),
                 id=html.escape(t.id),
@@ -190,9 +210,7 @@ def _tokens_page(
             csrf=html.escape(csrf),
             base=base,
             rows=rows,
-            # The reveal block always exists and is hidden when there's nothing
-            # to reveal — a plain HTML idiom, and one fewer template than
-            # conditionally splicing it in.
+            # Always in the markup, hidden when there's nothing to reveal.
             reveal_hidden="" if fresh else " hidden",
             empty_hidden=" hidden" if rows else "",
             fresh=html.escape(fresh) if fresh else "",
@@ -202,18 +220,21 @@ def _tokens_page(
 
 def register(mcp, store: ApiTokenStore | None) -> None:
     """Mount the token pages. Called from ``server`` so this module doesn't have
-    to import it back.
+    to import it back; ``store`` is passed in for the same reason.
 
-    ``store`` is passed in rather than read from the app context: tokens are a
-    browser concern now, so nothing on the MCP side needs to know about them.
+    Mounts nothing without OAuth: there is no way to sign in, and the session
+    key would derive from an empty secret — forgeable, and the deploy really
+    does run that way before the OAuth app is registered.
     """
+    if not settings.oauth_enabled:
+        logger.info("token pages not mounted: OAuth is not configured")
+        return
 
     @mcp.custom_route("/tokens/style.css", methods=["GET"])
     async def tokens_style(request: Request) -> Response:
-        # No session check: it's a stylesheet. Cached for a day so the page
-        # costs one request after the first load.
+        # No session check: it's a stylesheet.
         return Response(
-            (_TEMPLATES / "tokens.css").read_text(),
+            _template("tokens.css").template,
             media_type="text/css",
             headers={"Cache-Control": "public, max-age=86400"},
         )
@@ -257,44 +278,50 @@ def register(mcp, store: ApiTokenStore | None) -> None:
         cookie_state = request.cookies.get(STATE_COOKIE)
         expected = _unsign(cookie_state) if cookie_state else None
         if not code or not state or expected is None or state != expected:
-            # Without this an attacker can complete the flow with their own code
-            # and log the victim into the attacker's account.
-            return _fail(
+            # Else an attacker completes the flow with their own code.
+            return _fail_signin(
                 "Sign-in failed: invalid or expired request. "
                 f"Start again at {base}/tokens"
             )
 
-        async with httpx.AsyncClient(timeout=15) as client:
-            token_resp = await client.post(
-                GITHUB_TOKEN,
-                headers={"Accept": "application/json"},
-                data={
-                    "client_id": settings.oauth_client_id,
-                    "client_secret": settings.oauth_client_secret,
-                    "code": code,
-                    "redirect_uri": f"{base}/tokens/callback",
-                },
-            )
-            access = token_resp.json().get("access_token")
-            if not access:
-                logger.warning("token page: GitHub did not return an access token")
-                return _fail("Sign-in failed.")
-            user_resp = await client.get(
-                GITHUB_USER,
-                headers={
-                    "Authorization": f"Bearer {access}",
-                    "Accept": "application/vnd.github+json",
-                },
-            )
-            sub = user_resp.json().get("id")
+        # GitHub may answer HTML despite the Accept header; `.json()` raises.
+        try:
+            async with httpx.AsyncClient(timeout=15) as client:
+                token_resp = await client.post(
+                    GITHUB_TOKEN,
+                    headers={"Accept": "application/json"},
+                    data={
+                        "client_id": settings.oauth_client_id,
+                        "client_secret": settings.oauth_client_secret,
+                        "code": code,
+                        "redirect_uri": f"{base}/tokens/callback",
+                    },
+                )
+                access = token_resp.json().get("access_token")
+                if not access:
+                    logger.warning("token page: GitHub returned no access token")
+                    return _fail_signin("Sign-in failed.")
+                user_resp = await client.get(
+                    GITHUB_USER,
+                    headers={
+                        "Authorization": f"Bearer {access}",
+                        "Accept": "application/vnd.github+json",
+                    },
+                )
+                sub = user_resp.json().get("id")
+        except (ValueError, httpx.HTTPError) as exc:  # ValueError: JSONDecodeError
+            logger.warning("token page: GitHub sign-in failed: %s", exc)
+            return _fail_signin("Sign-in failed.")
         if sub is None:
-            return _fail("Sign-in failed.")
+            return _fail_signin("Sign-in failed.")
 
-        # Same shape TokenSubjectAuth produces, so a token minted here belongs to
-        # the same user_id the MCP tools see.
+        # Same user_id TokenSubjectAuth resolves for this account.
         response = RedirectResponse(f"{base}/tokens", status_code=302)
         _set_cookie(
-            response, SESSION_COOKIE, _new_session(f"github:{sub}"), SESSION_MAX_AGE
+            response,
+            SESSION_COOKIE,
+            _new_session(f"{GITHUB_SUBJECT_PREFIX}{sub}"),
+            SESSION_MAX_AGE,
         )
         response.delete_cookie(STATE_COOKIE, path="/tokens")
         return response

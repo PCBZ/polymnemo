@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import json
 import time
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 import pytest
 
@@ -104,6 +104,17 @@ class _StoreWithOneToken:
         ]
 
 
+class _RouteRecorder:
+    """Stands in for the FastMCP server: records what `register` mounts."""
+
+    def __init__(self) -> None:
+        self.paths: list[str] = []
+
+    def custom_route(self, path: str, methods: list[str]):
+        self.paths.append(path)
+        return lambda fn: fn
+
+
 class TestPages:
     def test_reveal_block_is_hidden_when_there_is_no_new_token(self):
         """The reveal block is always in the markup and hidden by attribute, so
@@ -147,3 +158,47 @@ class TestPages:
         # Normalised: the warning wraps in the template, and a test shouldn't
         # break when someone reflows the HTML.
         assert "cannot be shown again" in " ".join(body.split())
+
+
+class TestOAuthUnconfigured:
+    """Without OAuth the pages must not exist: the signing key would derive from
+    an empty secret, so anyone could forge a session and POST /tokens/create."""
+
+    def test_secret_refuses_to_derive_from_an_empty_client_secret(self, monkeypatch):
+        monkeypatch.setattr(web.settings, "oauth_client_secret", "")
+        with pytest.raises(RuntimeError, match="POLYMNEMO_OAUTH_CLIENT_SECRET"):
+            web._secret()
+
+    def test_no_routes_are_mounted(self, monkeypatch):
+        monkeypatch.setattr(web.settings, "oauth_client_id", "")
+        monkeypatch.setattr(web.settings, "oauth_client_secret", "")
+        recorder = _RouteRecorder()
+        web.register(recorder, None)
+        assert recorder.paths == []
+
+    def test_routes_are_mounted_once_oauth_is_configured(self, monkeypatch):
+        monkeypatch.setattr(web.settings, "oauth_client_id", "id")
+        monkeypatch.setattr(web.settings, "oauth_client_secret", "secret")
+        monkeypatch.setattr(web.settings, "oauth_base_url", "https://e.test")
+        recorder = _RouteRecorder()
+        web.register(recorder, None)
+        assert "/tokens" in recorder.paths
+        assert "/tokens/create" in recorder.paths
+
+
+class TestExpiryLabel:
+    def test_expired_token_is_marked(self):
+        past = datetime(2020, 1, 1, tzinfo=UTC)
+        assert web._expiry_label(past) == "2020-01-01 (expired)"
+
+    def test_live_token_is_not_marked(self):
+        future = datetime.now(UTC) + timedelta(days=30)
+        assert "(expired)" not in web._expiry_label(future)
+
+    def test_no_expiry_reads_never(self):
+        assert web._expiry_label(None) == "never"
+
+    def test_naive_timestamp_does_not_raise(self):
+        """Rows predating the tz-aware column come back naive; comparing them
+        against an aware `now` would raise TypeError."""
+        assert web._expiry_label(datetime(2020, 1, 1)) == "2020-01-01 (expired)"

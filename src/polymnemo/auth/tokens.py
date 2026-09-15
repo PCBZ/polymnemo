@@ -23,8 +23,7 @@ from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column
 
 from ..models import new_id
 
-# Identifies a polymnemo token on sight — in a log, a paste, or a secret
-# scanner — the way GitHub's "ghp_" prefix does.
+# Recognisable on sight in a log or a secret scanner, like GitHub's "ghp_".
 TOKEN_PREFIX = "pmn_"
 # 32 bytes: far past guessing, and short enough to paste.
 TOKEN_BYTES = 32
@@ -77,8 +76,11 @@ def _to_token(row: ApiTokenRow) -> ApiToken:
 
 
 class ApiTokenStore:
-    """Token persistence. Shares the memories database; its own engine keeps the
-    auth path independent of the memory store's pool, which reads can saturate.
+    """Token persistence, on the memories database.
+
+    Shares the memory store's engine, so a read burst that saturates the pool
+    also slows token lookups — accepted rather than spending a second pool
+    against Neon's 112-connection cap.
     """
 
     def __init__(self, engine) -> None:
@@ -90,9 +92,10 @@ class ApiTokenStore:
         """Mint a token. Returns ``(token, metadata)`` — the only time the token
         itself exists outside the caller's hands."""
         token = generate_token()
+        # `is not None`, not truthiness: 0 must not silently mean "never".
         expires_at = (
             datetime.now(UTC) + timedelta(days=expires_in_days)
-            if expires_in_days
+            if expires_in_days is not None
             else None
         )
         row = ApiTokenRow(
@@ -120,8 +123,7 @@ class ApiTokenStore:
             if row is None:
                 return None
             if row.expires_at is not None:
-                # Stored as timestamptz; compare in UTC so a naive value read
-                # back from some drivers can't silently compare as local time.
+                # Compare in UTC: some drivers hand back a naive value.
                 expires = row.expires_at
                 if expires.tzinfo is None:
                     expires = expires.replace(tzinfo=UTC)

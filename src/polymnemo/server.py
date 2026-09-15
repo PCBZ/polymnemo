@@ -84,10 +84,9 @@ mcp: FastMCP = FastMCP(
 )
 
 
-# Browser pages for minting tokens (#125). Registered here, not in web.py, so
-# that module doesn't import this one back. Tokens are deliberately absent from
-# the MCP tool surface: the page already lists and revokes them, and a secret
-# must never be reachable through a tool result.
+# Browser pages for minting tokens (#125). Registered here so web.py doesn't
+# import this module back. Deliberately absent from the MCP tool surface: a
+# secret must never be reachable through a tool result.
 web.register(mcp, _token_store())
 
 

@@ -21,6 +21,9 @@ from .tokens import ApiTokenStore
 
 # Created by scripts/schema.sql; shape must match what py-key-value-aio expects.
 OAUTH_KV_TABLE = "oauth_kv"
+
+# Shared with web.py: renaming one side alone would silently split identities.
+GITHUB_SUBJECT_PREFIX = "github:"
 # Marks a token that came from the static key table rather than OAuth.
 BEARER_CLIENT_ID = "static-bearer"
 
@@ -50,13 +53,10 @@ class GitHubOAuthProvider(GitHubProvider):
         oauth = await super().verify_token(token)
         if oauth is not None:
             return oauth
-        # Env keys before the database: they're the escape hatch, so they must
-        # not depend on the thing that might be down, and a dict lookup beats a
-        # query anyway.
+        # Env keys first: the escape hatch can't depend on the database.
         user_id = self._static_keys.get(token)
         if user_id is None and self._token_store is not None:
-            # The store is sync; verify_token is async. Off the event loop so a
-            # slow query can't stall every other in-flight request.
+            # Sync store, async caller: keep a slow query off the event loop.
             user_id = await asyncio.to_thread(self._token_store.resolve, token)
         if user_id is None:
             return None  # no scheme recognises it -> 401
@@ -88,7 +88,7 @@ class TokenSubjectAuth:
         # need namespacing, so a GitHub `sub` can't collide with a chosen name.
         if token.client_id == BEARER_CLIENT_ID:
             return token.subject
-        return f"github:{token.subject}"
+        return f"{GITHUB_SUBJECT_PREFIX}{token.subject}"
 
 
 def direct_dsn(dsn: str) -> str:
