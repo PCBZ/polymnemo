@@ -322,8 +322,7 @@ def main() -> None:
     """Console-script entry point: run the server over Streamable HTTP."""
     structured = settings.log_format.lower() == "json"
     configure_logging(structured=structured, level=settings.log_level)
-    # One structured line per call (#93). Registered here rather than at import
-    # so tests that import `mcp` don't inherit it.
+    # Registered here, not at import, so tests importing `mcp` don't get it.
     mcp.add_middleware(
         CallLogMiddleware(
             logger=logging.getLogger(CALL_LOGGER),
@@ -334,9 +333,7 @@ def main() -> None:
         )
     )
     _log_degradations()
-    # One line saying what this replica actually is. `ping` reports the same
-    # thing but needs authentication — which is exactly what you don't have when
-    # auth is the thing that's broken.
+    # What this replica is. `ping` says the same but needs auth to ask.
     logger.info(
         "Starting polymnemo %s at http://%s:%s%s — store=%s embedder=%s auth=%s "
         "blob=%s ratelimit=%s oauth=%s",

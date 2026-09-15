@@ -17,11 +17,11 @@ from fastmcp.server.auth.providers.github import GitHubProvider
 from fastmcp.server.dependencies import AccessToken, get_access_token
 from key_value.aio.stores.postgresql import PostgreSQLStore
 
-from ..logging import AUTH_LOGGER
 from .base import AuthError
 from .tokens import TOKEN_PREFIX, ApiTokenStore
 
-logger = logging.getLogger(AUTH_LOGGER)
+# `polymnemo.auth.*` — inherits the level configure_logging pins there.
+logger = logging.getLogger(__name__)
 
 # Created by scripts/schema.sql; shape must match what py-key-value-aio expects.
 OAUTH_KV_TABLE = "oauth_kv"
@@ -69,15 +69,11 @@ class GitHubOAuthProvider(GitHubProvider):
             # Sync store, async caller: keep a slow query off the event loop.
             user_id = await asyncio.to_thread(self._token_store.resolve, token)
         if user_id is None:
-            # The invisible rejection: FastMCP turns this into a 401 at the
-            # transport layer, before any middleware runs, so the call log
-            # cannot see it. Reason only — the token never goes in a log.
+            # A 401 at the transport layer: the call log never sees it.
             if not token.startswith(TOKEN_PREFIX):
                 reason = "unrecognised"
             elif self._token_store is None:
-                # Says what happened: with no database the token was never
-                # looked up, so calling it expired would send an operator
-                # hunting a revocation problem that doesn't exist.
+                # Never looked up, so "expired" would be a false lead.
                 reason = "no_token_store"
             else:
                 reason = "invalid_or_expired"

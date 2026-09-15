@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from collections.abc import Callable
 from typing import Any
 
@@ -25,14 +26,11 @@ logger = logging.getLogger("polymnemo")
 
 CALL_LOGGER = "polymnemo.calls"
 
-# Rejected credentials are a security record, not chatter. A 401 is raised at
-# the transport layer, before any middleware, so the call log cannot see it —
-# this logger is the only trace, and `log_level` must not be able to hide it.
+# A 401 is raised before any middleware, so this logger is the only record of
+# one. Auth modules reach it via `getLogger(__name__)`, inheriting this level.
 AUTH_LOGGER = "polymnemo.auth"
 
-# A call that never returns emits no completion line, so without this it leaves
-# no trace at all. Long enough that a healthy slow call (a cold embedding model
-# takes ~2 s) doesn't trip it.
+# A call that never returns emits no completion line, so it needs its own.
 SLOW_CALL_SECONDS = 10.0
 
 TEXT_FORMAT = "%(asctime)s %(levelname)s %(name)s: %(message)s"
@@ -41,35 +39,24 @@ TEXT_FORMAT = "%(asctime)s %(levelname)s %(name)s: %(message)s"
 def configure_logging(*, structured: bool, level: str) -> None:
     """Install the root handler. Called from the entry point, never on import."""
     resolved = getattr(logging, level.upper(), logging.INFO)
-    # `getattr` finds any attribute of that name, not only level constants:
-    # POLYMNEMO_LOG_LEVEL=BASIC_FORMAT yields a string, and the max() below
-    # would raise TypeError before a single line is logged.
+    # `getattr` finds any attribute, not just levels: BASIC_FORMAT is a str.
     if not isinstance(resolved, int):
         resolved = logging.INFO
     logging.basicConfig(
         # In json mode the record IS the object, so nothing may precede it.
         format="%(message)s" if structured else TEXT_FORMAT,
-        # Root gets the stricter of the two, so raising `level` also quietens
-        # libraries that inherit root, while DEBUG stays ours. Does not reach
-        # uvicorn, which configures its own loggers after this runs.
+        # Stricter of the two: raising `level` quietens libraries too.
         level=max(logging.INFO, resolved),
-        # basicConfig is a no-op once root has a handler, and by now something
-        # else has installed one — without this the format is silently ignored.
-        #
-        # Side effect for whoever adds an observability SDK later: this removes
-        # and closes EVERY existing root handler. A sentry-sdk / OpenTelemetry /
-        # Azure Monitor handler registered at import time would be evicted here
-        # and its capture would go dark silently. Attach such handlers after
-        # this runs, or to a named logger rather than root.
+        # Without this the format is ignored: root already has a handler.
+        # Note it closes every existing one — attach an SDK's handler after
+        # this runs, or to a named logger, or it goes dark silently.
         force=True,
     )
     logging.getLogger("polymnemo").setLevel(resolved)
-    # The call log is an access log, so it keeps its own level. Upstream logs
-    # failures at ERROR and successes at INFO, so following `level` would mean
-    # WARNING drops the successes and every error-rate query reads 100%.
+    # Its own level: upstream splits ERROR/INFO, so WARNING would drop the
+    # successes and every error-rate query would read 100%.
     logging.getLogger(CALL_LOGGER).setLevel(logging.INFO)
-    # Never above WARNING: LOG_LEVEL=ERROR would otherwise silence every 401,
-    # including a credential-stuffing run. Lowering it still works.
+    # Never above WARNING, or LOG_LEVEL=ERROR silences every 401.
     logging.getLogger(AUTH_LOGGER).setLevel(min(resolved, logging.WARNING))
 
 
@@ -77,8 +64,7 @@ def _target(context: MiddlewareContext[Any]) -> str | None:
     """The tool's name, or the resource's URI. Upstream only logs ``method``,
     which is always ``tools/call`` and so answers nothing per-tool."""
     message = getattr(context, "message", None)
-    # `is not None`, not truthiness: an empty name is an anomaly worth seeing in
-    # the log, not a reason to fall through and drop `target` entirely.
+    # `is not None`: an empty name is an anomaly to report, not to drop.
     name = getattr(message, "name", None)  # tools/call, prompts/get
     if name is not None:
         return str(name)
@@ -89,7 +75,8 @@ def _target(context: MiddlewareContext[Any]) -> str | None:
 
 
 class CallLogMiddleware(StructuredLoggingMiddleware):
-    """One line per call, carrying ``user_id`` and no message text.
+    """One line per completed call, carrying ``user_id`` and no message text.
+    A call still running after ``SLOW_CALL_SECONDS`` adds one more.
 
     Subclasses rather than reimplements: upstream already measures the duration
     around the real call and keeps payloads off. Hooks ``on_message``, so
@@ -113,9 +100,8 @@ class CallLogMiddleware(StructuredLoggingMiddleware):
         call — which costs a second lookup and, worse, lets the act of logging
         trigger auth's own side effects.
         """
-        if user_id is not None and new_scope is None:
-            # Without a scope the resolver reads a dict nothing ever wrote to,
-            # so every line would quietly lack `user_id`.
+        if (user_id is None) != (new_scope is None):
+            # Either alone yields lines with no `user_id`, silently.
             raise ValueError("user_id requires new_scope; pass both or neither")
         super().__init__(**kwargs)
         self.structured_logging = structured
@@ -125,25 +111,34 @@ class CallLogMiddleware(StructuredLoggingMiddleware):
     async def on_message(self, context: MiddlewareContext[Any], call_next: Any) -> Any:
         # Fresh scope per call, so one request can never read another's identity.
         self._new_scope()
-        watchdog = asyncio.ensure_future(self._note_if_still_running(context))
+        started = time.perf_counter()
+        watchdog = asyncio.create_task(self._note_if_still_running(context, started))
         try:
             return await super().on_message(context, call_next)
         finally:
             watchdog.cancel()
 
-    async def _note_if_still_running(self, context: MiddlewareContext[Any]) -> None:
+    async def _note_if_still_running(
+        self, context: MiddlewareContext[Any], started: float
+    ) -> None:
         """The only line a hung call ever produces.
 
         Dropping the `*_start` half buys one line per call, but a call that
         never returns never reaches its completion line either — so without
         this it is invisible: no target, no user, no sign it began.
+
+        A call that crosses the threshold and *then* finishes logs twice, on
+        purpose: one line saying it was still running, one saying how it ended.
+        Suppressing either would lose a fact worth having.
         """
         await asyncio.sleep(SLOW_CALL_SECONDS)
         message: dict[str, str | int | float] = {
             "event": "request_in_flight",
             "method": context.method or "unknown",
             "source": context.source,
-            "elapsed_ms": round(SLOW_CALL_SECONDS * 1000, 2),
+            # Measured: a loaded loop wakes late, and a constant here would
+            # only ever repeat its own assumption.
+            "elapsed_ms": round((time.perf_counter() - started) * 1000, 2),
         }
         self._log_message(self._annotate(message, context), logging.WARNING)
 
@@ -165,8 +160,7 @@ class CallLogMiddleware(StructuredLoggingMiddleware):
         self, context: MiddlewareContext[Any], start_time: float, error: Exception
     ) -> dict[str, str | int | float]:
         message = super()._create_error_message(context, start_time, error)
-        # The class, never the message: `tool_errors` keeps domain ValueError
-        # text intact and service validation echoes user input back.
+        # The class, never the message: it can carry caller data.
         message["error"] = type(error).__name__
         return self._annotate(message, context)
 
@@ -175,6 +169,9 @@ class CallLogMiddleware(StructuredLoggingMiddleware):
         message: dict[str, str | int | float],
         context: MiddlewareContext[Any],
     ) -> dict[str, str | int | float]:
+        # Upstream leaves `source` unguarded, so None emits as null.
+        if message.get("source") is None:
+            message["source"] = "unknown"
         target = _target(context)
         if target is not None:
             message["target"] = target

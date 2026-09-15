@@ -425,7 +425,7 @@ class TestConcurrentRequestsDoNotMix:
         async def one_request(user: str):
             tooling.new_request_scope()
             await asyncio.sleep(0)  # let the scheduler interleave
-            tooling._REQUEST.get({})["user_id"] = user
+            tooling._scope()["user_id"] = user
             await asyncio.sleep(0)
             seen[user] = tooling.current_user_id()
 
@@ -511,6 +511,19 @@ class TestTheRealWiring:
 class TestReviewFixes:
     """One per finding on #128, asserted at the seam each one broke."""
 
+    @pytest.fixture(autouse=True)
+    def _restore_loggers(self):
+        """These call configure_logging for real. Without restoring, a level set
+        here leaks into every later test in the session."""
+        names = ("", "polymnemo", log_mod.CALL_LOGGER, log_mod.AUTH_LOGGER)
+        saved = [(logging.getLogger(n), logging.getLogger(n).level) for n in names]
+        root = logging.getLogger()
+        handlers = list(root.handlers)
+        yield
+        for log, level in saved:
+            log.setLevel(level)
+        root.handlers = handlers
+
     def test_a_resolver_without_a_scope_is_refused(self):
         """Constructing with user_id but no new_scope used to succeed and then
         emit every line without user_id — no exception, no warning."""
@@ -558,12 +571,17 @@ class TestReviewFixes:
             await asyncio.sleep(5)
 
         with caplog.at_level(logging.WARNING):
-            task = asyncio.ensure_future(mw.on_message(_context(), never_returns))
+            task = asyncio.create_task(mw.on_message(_context(), never_returns))
             await asyncio.sleep(0.1)
             entry = json.loads(_lines(caplog)[0])
             task.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await task  # awaited, or pytest reports a destroyed pending task
         assert entry["event"] == "request_in_flight"
         assert entry["target"] == "remember"
+        # Measured, not the threshold echoed back.
+        assert entry["elapsed_ms"] >= 10
+        assert entry["source"] == "client"
 
     async def test_a_normal_call_leaves_no_in_flight_line(self, caplog):
         with caplog.at_level(logging.WARNING):
@@ -636,18 +654,147 @@ class TestDegradationChecksSurviveSubclassing:
 
 
 class TestSignInFailureKeepsTheDetail:
-    def test_the_message_is_logged_not_just_the_class(self, caplog):
-        """A class name can't tell a 429 rate-limit from a 503 outage; these
-        messages carry only the endpoint and status."""
-        import httpx
+    def test_the_handler_logs_the_message_not_just_the_class(self, caplog):
+        """Asserted against web.py's own source, not by calling logger.warning
+        with the format string here — that would only prove that Python
+        interpolates, and would stay green if web.py reverted to the class
+        alone."""
+        import inspect
 
         from polymnemo import web
 
+        source = inspect.getsource(web)
+        assert '"token page: GitHub sign-in failed (%s: %s)"' in source
+        assert "type(exc).__name__, exc" in source
+
+    def test_an_httpx_message_carries_no_caller_data(self):
+        """The reason it is safe to log: these messages name the endpoint and
+        the status, never the OAuth code, which travels in the POST body."""
+        import httpx
+
         exc = httpx.ConnectTimeout("timed out reaching api.github.com")
-        with caplog.at_level(logging.WARNING):
-            web.logger.warning(
-                "token page: GitHub sign-in failed (%s: %s)", type(exc).__name__, exc
+        rendered = f"{type(exc).__name__}: {exc}"
+        assert "api.github.com" in rendered
+        assert "ConnectTimeout" in rendered
+
+
+class TestSecondReviewFixes:
+    """One per finding on the second pass over #128."""
+
+    @pytest.fixture(autouse=True)
+    def _restore_loggers(self):
+        names = ("", "polymnemo", log_mod.CALL_LOGGER, log_mod.AUTH_LOGGER)
+        saved = [(logging.getLogger(n), logging.getLogger(n).level) for n in names]
+        yield
+        for log, level in saved:
+            log.setLevel(level)
+
+    def test_a_scope_without_a_resolver_is_refused(self):
+        """The guard was one-directional: new_scope alone opened a scope for
+        nobody and logged no user_id anywhere, silently."""
+        with pytest.raises(ValueError, match="both or neither"):
+            CallLogMiddleware(
+                logger=logging.getLogger(log_mod.CALL_LOGGER),
+                new_scope=lambda: None,
             )
-        line = caplog.records[0].getMessage()
-        assert "ConnectTimeout" in line
-        assert "api.github.com" in line
+
+    def test_neither_is_still_allowed(self):
+        CallLogMiddleware(logger=logging.getLogger(log_mod.CALL_LOGGER))
+
+    async def test_elapsed_ms_is_measured_not_the_threshold_restated(
+        self, caplog, monkeypatch
+    ):
+        """It was `SLOW_CALL_SECONDS * 1000` — a constant that can only ever
+        repeat its own assumption, which is the #96 mistake again."""
+        import asyncio
+
+        monkeypatch.setattr(log_mod, "SLOW_CALL_SECONDS", 0.05)
+        mw = _middleware()
+
+        async def slow(context):
+            await asyncio.sleep(1)
+
+        with caplog.at_level(logging.WARNING):
+            task = asyncio.create_task(mw.on_message(_context(), slow))
+            await asyncio.sleep(0.25)
+            task.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await task
+        elapsed = json.loads(_lines(caplog)[0])["elapsed_ms"]
+        assert elapsed != 50.0, "still the threshold echoed back"
+        assert elapsed >= 50.0
+
+    async def test_a_missing_source_does_not_become_null(self, caplog):
+        """`method` had a fallback and `source` didn't, so a None source
+        violated the line's own type and emitted `"source": null`."""
+        context = SimpleNamespace(
+            type="request",
+            method=None,
+            source=None,
+            message=SimpleNamespace(name="remember"),
+        )
+        with caplog.at_level(logging.INFO):
+            await _middleware().on_message(context, _ok)
+        entry = json.loads(_lines(caplog)[0])
+        assert entry["source"] == "unknown"
+        assert entry["method"] == "unknown"
+
+    def test_auth_modules_do_not_import_the_logging_constant(self):
+        """They sit under `polymnemo.auth.*` via __name__ and inherit the level
+        pinned there — nothing to keep in sync, and no dependency from auth back
+        to logging configuration."""
+        import inspect
+
+        from polymnemo.auth import bearer, oauth
+
+        for module in (bearer, oauth):
+            source = inspect.getsource(module)
+            assert "AUTH_LOGGER" not in source
+            assert "getLogger(__name__)" in source
+        assert bearer.logger.name.startswith("polymnemo.auth.")
+
+    def test_the_pinned_level_reaches_the_child_loggers(self):
+        from polymnemo.auth import bearer
+
+        log_mod.configure_logging(structured=False, level="ERROR")
+        assert bearer.logger.isEnabledFor(logging.WARNING)
+
+    def test_the_watchdog_is_a_task_not_ensure_future(self):
+        """Read off the bytecode, not the source text — the comment above the
+        call names `ensure_future`, so a source match tests the prose."""
+        names = log_mod.CallLogMiddleware.on_message.__code__.co_names
+        assert "create_task" in names
+        assert "ensure_future" not in names
+
+
+class TestSlowCallLogsTwiceOnPurpose:
+    """A call crossing the threshold and then finishing logs both lines.
+
+    The review asked for one; suppressing either loses a fact. The in-flight
+    line is the only evidence the call was stuck, and the completion line is the
+    only evidence of how it ended. Asserted so the behaviour is a decision
+    rather than something that drifted.
+    """
+
+    async def test_both_lines_appear_in_order(self, caplog, monkeypatch):
+        import asyncio
+
+        monkeypatch.setattr(log_mod, "SLOW_CALL_SECONDS", 0.02)
+
+        async def slow(context):
+            await asyncio.sleep(0.15)
+            return "ok"
+
+        with caplog.at_level(logging.INFO):
+            await _middleware().on_message(_context(), slow)
+        events = [json.loads(line)["event"] for line in _lines(caplog)]
+        assert events == ["request_in_flight", "request_success"]
+
+    async def test_a_call_under_the_threshold_logs_once(self, caplog, monkeypatch):
+        import asyncio
+
+        monkeypatch.setattr(log_mod, "SLOW_CALL_SECONDS", 5.0)
+        with caplog.at_level(logging.INFO):
+            await _middleware().on_message(_context(), _ok)
+            await asyncio.sleep(0)
+        assert len(_lines(caplog)) == 1

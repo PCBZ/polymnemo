@@ -10,10 +10,10 @@ from __future__ import annotations
 import logging
 from collections.abc import Mapping
 
-from ..logging import AUTH_LOGGER
 from .base import AuthError
 
-logger = logging.getLogger(AUTH_LOGGER)
+# `polymnemo.auth.*` — inherits the level configure_logging pins there.
+logger = logging.getLogger(__name__)
 
 
 class BearerKeyAuth:
@@ -25,8 +25,7 @@ class BearerKeyAuth:
         token = self._bearer_token(headers)
         user_id = self._keys.get(token)
         if user_id is None:
-            # The reason, never the token or any prefix of it: a partial
-            # credential in a log is still credential material.
+            # The reason only: a partial credential is still credential.
             _rejected("unknown_key")
             raise AuthError("Invalid API key")
         return user_id

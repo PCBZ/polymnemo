@@ -37,9 +37,6 @@ class GlobalRateLimiter:
         try:
             self._limiter.try_acquire(self._KEY, weight=cost)
         except BucketFullException as exc:
-            # In the call log this arrives as a ToolError, indistinguishable
-            # from an argument-validation failure. Hitting the bucket means real
-            # users are being turned away — an operational event, not a client
-            # error, and the signal that the limit needs raising.
+            # The call log shows only a ToolError; this says which kind.
             logger.warning("rate limit hit: cost=%d, limit=%d/min", cost, self._per_min)
             raise RateLimitError("rate limit exceeded — please slow down.") from exc

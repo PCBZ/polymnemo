@@ -320,9 +320,7 @@ def register(mcp, store: ApiTokenStore | None) -> None:
                 )
                 sub = user_resp.json().get("id")
         except (ValueError, httpx.HTTPError) as exc:  # ValueError: JSONDecodeError
-            # Both: the class alone can't tell a 429 rate-limit from a 503,
-            # and these messages carry only the endpoint and status — the OAuth
-            # `code` travels in the POST body, never in an exception.
+            # The message too: it carries the status, not the OAuth code.
             logger.warning(
                 "token page: GitHub sign-in failed (%s: %s)", type(exc).__name__, exc
             )
@@ -363,8 +361,7 @@ def register(mcp, store: ApiTokenStore | None) -> None:
         # rotate. A year is the ceiling; scripts wanting longer re-mint.
         days = max(1, min(days, 365))
         token, meta = await asyncio.to_thread(store.create, user_id, label, days)
-        # Audit, not ops: who minted a credential and when cannot be
-        # reconstructed afterwards. The token itself never appears.
+        # Audit: a credential's provenance can't be reconstructed later.
         logger.info(
             "api token created: user=%s id=%s label=%s expires=%s",
             user_id,

@@ -22,10 +22,8 @@ from . import app
 from .auth import AuthError
 from .ratelimit import RateLimitError
 
-# Per-request scratch space. A ContextVar holding a *mutable* dict, not a bare
-# value: each task gets its own copy of the context, so concurrent requests
-# can't see each other's, and mutating the dict (rather than rebinding the var)
-# is visible to the caller even when a sync tool runs in a worker thread.
+# Per-request scratch space. A ContextVar so concurrent requests stay apart,
+# holding a mutable dict because rebinding is lost across a worker thread.
 _REQUEST: ContextVar[dict[str, str] | None] = ContextVar("request_scope", default=None)
 
 
