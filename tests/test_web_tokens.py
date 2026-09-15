@@ -88,31 +88,34 @@ class TestCsrf:
         assert not web._csrf_ok(_FakeRequest({}), {"csrf": "anything"})
 
 
-class _StoreWithOneToken:
-    """Only `list_for_user` is used by the page renderer."""
-
-    def list_for_user(self, user_id: str) -> list[ApiToken]:
-        now = datetime(2026, 9, 14, tzinfo=UTC)
-        return [
-            ApiToken(
-                id="a1",
-                user_id=user_id,
-                label="ci-runner",
-                created_at=now,
-                expires_at=None,
-            )
-        ]
+def _one_token() -> list[ApiToken]:
+    return [
+        ApiToken(
+            id="a1",
+            user_id="github:1",
+            label="ci-runner",
+            created_at=datetime(2026, 9, 14, tzinfo=UTC),
+            expires_at=None,
+        )
+    ]
 
 
 class _RouteRecorder:
-    """Stands in for the FastMCP server: records what `register` mounts."""
+    """Stands in for the FastMCP server: records what `register` mounts, and
+    keeps the handlers so a route can be driven directly."""
 
     def __init__(self) -> None:
         self.paths: list[str] = []
+        self.handlers: dict[str, object] = {}
 
     def custom_route(self, path: str, methods: list[str]):
         self.paths.append(path)
-        return lambda fn: fn
+
+        def keep(fn):
+            self.handlers[path] = fn
+            return fn
+
+        return keep
 
 
 class TestPages:
@@ -122,20 +125,20 @@ class TestPages:
         # The exact attribute, not just the word "hidden": the CSRF field is an
         # `<input type="hidden">`, so a loose match passes even when the reveal
         # block is wide open.
-        plain = web._tokens_page(None, "github:1", "csrf", "https://e.test")
+        plain = web._tokens_page([], "github:1", "csrf", "https://e.test")
         assert '<div class="card" hidden>' in plain.body.decode()
         fresh = web._tokens_page(
-            None, "github:1", "csrf", "https://e.test", fresh="pmn_x"
+            [], "github:1", "csrf", "https://e.test", fresh="pmn_x"
         )
         assert '<div class="card" hidden>' not in fresh.body.decode()
 
     def test_empty_state_shows_only_when_there_are_no_tokens(self):
         """Same attribute trick as the reveal block: the "no tokens" row is
         always in the table and hidden once there is a real row."""
-        empty = web._tokens_page(None, "github:1", "csrf", "https://e.test")
+        empty = web._tokens_page([], "github:1", "csrf", "https://e.test")
         assert '<tr><td colspan="4" class="meta">No tokens yet.' in empty.body.decode()
         full = web._tokens_page(
-            _StoreWithOneToken(), "github:1", "csrf", "https://e.test"
+            _one_token(), "github:1", "csrf", "https://e.test"
         ).body.decode()
         assert "<tr hidden>" in full
         assert "<td>ci-runner</td>" in full
@@ -144,7 +147,7 @@ class TestPages:
         """A GitHub login can't contain markup today, but the page must not
         depend on that."""
         page = web._tokens_page(
-            None, "github:<script>x</script>", "csrf", "https://e.test"
+            [], "github:<script>x</script>", "csrf", "https://e.test"
         )
         body = page.body.decode()
         assert "<script>x</script>" not in body
@@ -152,7 +155,7 @@ class TestPages:
 
     def test_new_token_is_shown_with_a_warning(self):
         body = web._tokens_page(
-            None, "github:1", "csrf", "https://e.test", fresh="pmn_secret"
+            [], "github:1", "csrf", "https://e.test", fresh="pmn_secret"
         ).body.decode()
         assert "pmn_secret" in body
         # Normalised: the warning wraps in the template, and a test shouldn't
@@ -202,3 +205,49 @@ class TestExpiryLabel:
         """Rows predating the tz-aware column come back naive; comparing them
         against an aware `now` would raise TypeError."""
         assert web._expiry_label(datetime(2020, 1, 1)) == "2020-01-01 (expired)"
+
+
+class TestRevokeFeedback:
+    """`revoke` returns False when no row matched — already gone, or not this
+    user's. Redirecting anyway reports success for something that didn't
+    happen."""
+
+    class _PostRequest:
+        def __init__(self, cookie: str, csrf: str, token_id: str) -> None:
+            self.cookies = {web.SESSION_COOKIE: cookie}
+            self.headers = {"host": "e.test"}
+            self.url = type("U", (), {"scheme": "https"})()
+            self._form = {"csrf": csrf, "id": token_id}
+
+        async def form(self):
+            return self._form
+
+    class _Store:
+        def __init__(self, result: bool) -> None:
+            self.result = result
+
+        def revoke(self, user_id: str, token_id: str) -> bool:
+            return self.result
+
+    def _handler(self, monkeypatch, store):
+        monkeypatch.setattr(web.settings, "oauth_client_id", "id")
+        monkeypatch.setattr(web.settings, "oauth_base_url", "https://e.test")
+        recorder = _RouteRecorder()
+        web.register(recorder, store)
+        return recorder.handlers["/tokens/revoke"]
+
+    def _request(self):
+        cookie = web._new_session("github:1")
+        csrf = web._session_csrf(_FakeRequest({web.SESSION_COOKIE: cookie}))
+        return self._PostRequest(cookie, csrf or "", "a1")
+
+    async def test_failed_revoke_is_reported(self, monkeypatch):
+        handler = self._handler(monkeypatch, self._Store(False))
+        response = await handler(self._request())
+        assert response.status_code == 400
+        assert b"already revoked" in response.body
+
+    async def test_successful_revoke_redirects(self, monkeypatch):
+        handler = self._handler(monkeypatch, self._Store(True))
+        response = await handler(self._request())
+        assert response.status_code == 302

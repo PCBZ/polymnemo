@@ -17,6 +17,7 @@ flow against the same GitHub app and end in a signed cookie.
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import hmac
 import html
@@ -40,7 +41,7 @@ from starlette.responses import (
 )
 
 from .auth.oauth import GITHUB_SUBJECT_PREFIX
-from .auth.tokens import ApiTokenStore
+from .auth.tokens import ApiToken, ApiTokenStore
 from .config import settings
 
 logger = logging.getLogger("polymnemo")
@@ -184,17 +185,27 @@ def _expiry_label(expires_at: datetime | None) -> str:
     return f"{shown} (expired)" if expires_at <= datetime.now(UTC) else shown
 
 
+async def _load_tokens(store: ApiTokenStore | None, user_id: str) -> list[ApiToken]:
+    """The store is sync and these handlers are async: off the event loop, so a
+    slow query can't stall every other in-flight request."""
+    if store is None:
+        return []
+    return await asyncio.to_thread(store.list_for_user, user_id)
+
+
 def _tokens_page(
-    store: ApiTokenStore | None,
+    tokens: list[ApiToken],
     user_id: str,
     csrf: str,
     base: str,
     fresh: str | None = None,
 ) -> HTMLResponse:
+    """Renders the page. Takes the rows rather than the store, so the query
+    stays in the handler where it can be pushed off the event loop."""
     rows = ""
-    if store is not None:
+    if tokens:
         row = _template("token_row.html")
-        for t in store.list_for_user(user_id):
+        for t in tokens:
             rows += row.substitute(
                 label=html.escape(t.label),
                 created=t.created_at.date().isoformat(),
@@ -245,12 +256,11 @@ def register(mcp, store: ApiTokenStore | None) -> None:
         user_id = _session_user(request)
         if user_id is None:
             return RedirectResponse(f"{base}/tokens/login", status_code=302)
-        return _tokens_page(store, user_id, _session_csrf(request) or "", base)
+        tokens = await _load_tokens(store, user_id)
+        return _tokens_page(tokens, user_id, _session_csrf(request) or "", base)
 
     @mcp.custom_route("/tokens/login", methods=["GET"])
     async def tokens_login(request: Request) -> Response:
-        if not settings.oauth_enabled:
-            return _fail("OAuth is not configured on this server.")
         base = _base_url(request)
         state = secrets.token_urlsafe(16)
         url = (
@@ -342,10 +352,14 @@ def register(mcp, store: ApiTokenStore | None) -> None:
             days = int(str(form.get("expires_days") or 90))
         except ValueError:
             days = 90
+        # Clamped, and no "never" option: `create` accepts None for a
+        # permanent token, but a credential minted from a browser should
+        # rotate. A year is the ceiling; scripts wanting longer re-mint.
         days = max(1, min(days, 365))
-        token, _ = store.create(user_id, label, days)
+        token, _ = await asyncio.to_thread(store.create, user_id, label, days)
+        tokens = await _load_tokens(store, user_id)
         return _tokens_page(
-            store, user_id, _session_csrf(request) or "", base, fresh=token
+            tokens, user_id, _session_csrf(request) or "", base, fresh=token
         )
 
     @mcp.custom_route("/tokens/revoke", methods=["POST"])
@@ -356,7 +370,11 @@ def register(mcp, store: ApiTokenStore | None) -> None:
         if user_id is None or not _csrf_ok(request, form):
             return _fail("Request rejected.")
         if store is not None:
-            store.revoke(user_id, str(form.get("id") or ""))
+            token_id = str(form.get("id") or "")
+            revoked = await asyncio.to_thread(store.revoke, user_id, token_id)
+            if not revoked:
+                # False means no row matched: already gone, or not this user's.
+                return _fail("Token not found, or already revoked.")
         return RedirectResponse(f"{base}/tokens", status_code=302)
 
 

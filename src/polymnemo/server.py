@@ -31,7 +31,7 @@ def _token_store():
     """
     from .auth.tokens import ApiTokenStore
 
-    engine = getattr(app.ctx.store, "_engine", None)
+    engine = getattr(app.ctx.store, "engine", None)
     return ApiTokenStore(engine) if engine is not None else None
 
 

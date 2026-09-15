@@ -17,7 +17,7 @@ from fastmcp.server.dependencies import AccessToken, get_access_token
 from key_value.aio.stores.postgresql import PostgreSQLStore
 
 from .base import AuthError
-from .tokens import ApiTokenStore
+from .tokens import TOKEN_PREFIX, ApiTokenStore
 
 # Created by scripts/schema.sql; shape must match what py-key-value-aio expects.
 OAUTH_KV_TABLE = "oauth_kv"
@@ -55,7 +55,13 @@ class GitHubOAuthProvider(GitHubProvider):
             return oauth
         # Env keys first: the escape hatch can't depend on the database.
         user_id = self._static_keys.get(token)
-        if user_id is None and self._token_store is not None:
+        # The prefix as a gate, not just a label: anything without it cannot be
+        # one of ours, so it never costs a hash and a round-trip.
+        if (
+            user_id is None
+            and self._token_store is not None
+            and token.startswith(TOKEN_PREFIX)
+        ):
             # Sync store, async caller: keep a slow query off the event loop.
             user_id = await asyncio.to_thread(self._token_store.resolve, token)
         if user_id is None:
