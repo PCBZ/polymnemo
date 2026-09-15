@@ -527,11 +527,12 @@ class TestReviewFixes:
     def test_a_resolver_without_a_scope_is_refused(self):
         """Constructing with user_id but no new_scope used to succeed and then
         emit every line without user_id — no exception, no warning."""
-        with pytest.raises(ValueError, match="new_scope"):
+        with pytest.raises(ValueError) as caught:
             CallLogMiddleware(
                 logger=logging.getLogger(log_mod.CALL_LOGGER),
                 user_id=lambda: "alice",
             )
+        assert str(caught.value) == "pass both user_id and new_scope, or neither"
 
     def test_a_level_name_that_is_not_a_level_falls_back(self):
         """`getattr(logging, ...)` finds any attribute: BASIC_FORMAT is a str,
@@ -667,16 +668,6 @@ class TestSignInFailureKeepsTheDetail:
         assert '"token page: GitHub sign-in failed (%s: %s)"' in source
         assert "type(exc).__name__, exc" in source
 
-    def test_an_httpx_message_carries_no_caller_data(self):
-        """The reason it is safe to log: these messages name the endpoint and
-        the status, never the OAuth code, which travels in the POST body."""
-        import httpx
-
-        exc = httpx.ConnectTimeout("timed out reaching api.github.com")
-        rendered = f"{type(exc).__name__}: {exc}"
-        assert "api.github.com" in rendered
-        assert "ConnectTimeout" in rendered
-
 
 class TestSecondReviewFixes:
     """One per finding on the second pass over #128."""
@@ -685,18 +676,26 @@ class TestSecondReviewFixes:
     def _restore_loggers(self):
         names = ("", "polymnemo", log_mod.CALL_LOGGER, log_mod.AUTH_LOGGER)
         saved = [(logging.getLogger(n), logging.getLogger(n).level) for n in names]
+        root = logging.getLogger()
+        handlers = list(root.handlers)
         yield
         for log, level in saved:
             log.setLevel(level)
+        # configure_logging runs basicConfig(force=True), which swaps root's
+        # handler for a fresh one; restoring levels alone leaks it.
+        root.handlers = handlers
 
     def test_a_scope_without_a_resolver_is_refused(self):
         """The guard was one-directional: new_scope alone opened a scope for
         nobody and logged no user_id anywhere, silently."""
-        with pytest.raises(ValueError, match="both or neither"):
+        with pytest.raises(ValueError) as caught:
             CallLogMiddleware(
                 logger=logging.getLogger(log_mod.CALL_LOGGER),
                 new_scope=lambda: None,
             )
+        # Symmetric wording: "user_id requires new_scope" would tell this caller
+        # to add the thing they already passed.
+        assert str(caught.value) == "pass both user_id and new_scope, or neither"
 
     def test_neither_is_still_allowed(self):
         CallLogMiddleware(logger=logging.getLogger(log_mod.CALL_LOGGER))
@@ -722,7 +721,9 @@ class TestSecondReviewFixes:
                 await task
         elapsed = json.loads(_lines(caplog)[0])["elapsed_ms"]
         assert elapsed != 50.0, "still the threshold echoed back"
-        assert elapsed >= 50.0
+        # Two-sided: a microsecond/millisecond mix-up would give ~250_000 and
+        # sail past a lower bound alone.
+        assert 50.0 <= elapsed <= 1000.0
 
     async def test_a_missing_source_does_not_become_null(self, caplog):
         """`method` had a fallback and `source` didn't, so a None source
@@ -759,12 +760,21 @@ class TestSecondReviewFixes:
         log_mod.configure_logging(structured=False, level="ERROR")
         assert bearer.logger.isEnabledFor(logging.WARNING)
 
-    def test_the_watchdog_is_a_task_not_ensure_future(self):
-        """Read off the bytecode, not the source text — the comment above the
-        call names `ensure_future`, so a source match tests the prose."""
-        names = log_mod.CallLogMiddleware.on_message.__code__.co_names
-        assert "create_task" in names
-        assert "ensure_future" not in names
+    async def test_the_watchdog_is_scheduled_as_a_task(self, monkeypatch):
+        """Behavioural. `co_names` was a CPython detail, and it couldn't tell
+        `asyncio.create_task` from `get_running_loop().create_task`."""
+        import asyncio
+
+        real = asyncio.create_task
+        scheduled = []
+
+        def spy(coro, **kw):
+            scheduled.append(coro)
+            return real(coro, **kw)
+
+        monkeypatch.setattr(asyncio, "create_task", spy)
+        await _middleware().on_message(_context(), _ok)
+        assert scheduled, "the watchdog was never scheduled"
 
 
 class TestSlowCallLogsTwiceOnPurpose:

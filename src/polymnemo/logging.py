@@ -102,7 +102,7 @@ class CallLogMiddleware(StructuredLoggingMiddleware):
         """
         if (user_id is None) != (new_scope is None):
             # Either alone yields lines with no `user_id`, silently.
-            raise ValueError("user_id requires new_scope; pass both or neither")
+            raise ValueError("pass both user_id and new_scope, or neither")
         super().__init__(**kwargs)
         self.structured_logging = structured
         self._user_id = user_id or (lambda: None)
@@ -169,7 +169,9 @@ class CallLogMiddleware(StructuredLoggingMiddleware):
         message: dict[str, str | int | float],
         context: MiddlewareContext[Any],
     ) -> dict[str, str | int | float]:
-        # Upstream leaves `source` unguarded, so None emits as null.
+        # Defensive: `source` is a plain dataclass field, so its Literal type
+        # is not enforced and a None would emit as null. `method` has the same
+        # guard upstream.
         if message.get("source") is None:
             message["source"] = "unknown"
         target = _target(context)
