@@ -15,9 +15,16 @@ from functools import lru_cache
 
 from fastmcp import FastMCP
 
-from . import __version__, app, observability, web
+from . import __version__, app, web
 from .config import settings
-from .tooling import current_user, rate_limited, tool_errors
+from .logging import CALL_LOGGER, CallLogMiddleware, configure_logging
+from .tooling import (
+    current_user,
+    current_user_id,
+    new_request_scope,
+    rate_limited,
+    tool_errors,
+)
 
 logger = logging.getLogger("polymnemo")
 
@@ -288,23 +295,59 @@ def namespace_collection(namespace: str) -> dict:
     return app.service.list_memories(current_user(), namespace=namespace)
 
 
+def _log_degradations() -> None:
+    """Warn about a context that started in a reduced mode.
+
+    Derived here, from the built context, rather than logged at the decision
+    point in ``context``: ``app.ctx`` is built at import, before ``main`` can
+    configure logging, so anything logged there comes out unformatted and in
+    text even under ``log_format=json``. Re-deriving is the cheaper fix; making
+    the context lazy would touch every ``app.ctx`` reference.
+    """
+    if type(app.ctx.store).__name__ == "InMemoryStore":
+        logger.warning(
+            "Running on InMemoryStore (no POLYMNEMO_DATABASE_URL): not durable, "
+            "not shared across instances."
+        )
+    if type(app.ctx.auth).__name__ == "BearerKeyAuth" and not settings.parse_api_keys():
+        logger.warning(
+            "auth_backend=bearer but no POLYMNEMO_API_KEYS set; all requests "
+            "will be rejected."
+        )
+
+
 def main() -> None:
     """Console-script entry point: run the server over Streamable HTTP."""
     structured = settings.log_format.lower() == "json"
-    observability.configure_logging(structured=structured, level=settings.log_level)
+    configure_logging(structured=structured, level=settings.log_level)
     # One structured line per call (#93). Registered here rather than at import
     # so tests that import `mcp` don't inherit it.
     mcp.add_middleware(
-        observability.CallLogMiddleware(
-            logger=logging.getLogger(observability.CALL_LOGGER),
+        CallLogMiddleware(
+            logger=logging.getLogger(CALL_LOGGER),
             structured=structured,
+            # Injected, so the logging layer has no dependency on auth.
+            user_id=current_user_id,
+            new_scope=new_request_scope,
         )
     )
+    _log_degradations()
+    # One line saying what this replica actually is. `ping` reports the same
+    # thing but needs authentication — which is exactly what you don't have when
+    # auth is the thing that's broken.
     logger.info(
-        "Starting polymnemo MCP server at http://%s:%s%s",
+        "Starting polymnemo %s at http://%s:%s%s — store=%s embedder=%s auth=%s "
+        "blob=%s ratelimit=%s oauth=%s",
+        __version__,
         settings.host,
         settings.port,
         settings.mcp_path,
+        type(app.ctx.store).__name__,
+        type(app.ctx.embedder).__name__,
+        type(app.ctx.auth).__name__,
+        type(app.ctx.blob_store).__name__ if app.ctx.blob_store else "none",
+        type(app.ctx.rate_limiter).__name__ if app.ctx.rate_limiter else "none",
+        settings.oauth_enabled,
     )
     mcp.run(
         transport="http",

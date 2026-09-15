@@ -13,6 +13,7 @@ They read the running context from ``app`` (not ``server``) to avoid a cycle.
 from __future__ import annotations
 
 import functools
+from contextvars import ContextVar
 
 from fastmcp.exceptions import ToolError
 from fastmcp.server.dependencies import get_http_headers
@@ -20,6 +21,27 @@ from fastmcp.server.dependencies import get_http_headers
 from . import app
 from .auth import AuthError
 from .ratelimit import RateLimitError
+
+# Per-request scratch space. A ContextVar holding a *mutable* dict, not a bare
+# value: each task gets its own copy of the context, so concurrent requests
+# can't see each other's, and mutating the dict (rather than rebinding the var)
+# is visible to the caller even when a sync tool runs in a worker thread.
+_REQUEST: ContextVar[dict[str, str]] = ContextVar("request_scope")
+
+
+def new_request_scope() -> None:
+    """Start a request's scope. Called once per call, before the tool runs."""
+    _REQUEST.set({})
+
+
+def current_user_id() -> str | None:
+    """The ``user_id`` this request authenticated as, or None if it never did.
+
+    Read-only: it reports what ``current_user`` resolved rather than resolving
+    again, so a caller (the call log) can name the identity without re-running
+    authentication or being able to trigger its side effects.
+    """
+    return _REQUEST.get({}).get("user_id")
 
 
 def current_user() -> str:
@@ -30,9 +52,11 @@ def current_user() -> str:
     # get_http_headers() strips `authorization` by default; opt it back in.
     headers = get_http_headers(include={"authorization"})
     try:
-        return app.ctx.auth.authenticate(headers)
+        user_id = app.ctx.auth.authenticate(headers)
     except AuthError as exc:
         raise ToolError(f"Authentication failed: {exc}") from exc
+    _REQUEST.get({})["user_id"] = user_id
+    return user_id
 
 
 def rate_limited(cost: int = 1):

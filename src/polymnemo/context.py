@@ -12,7 +12,6 @@ validate/serialize), and the wiring shouldn't change after startup.
 
 from __future__ import annotations
 
-import logging
 from dataclasses import dataclass
 
 from .auth import Auth, BearerKeyAuth, StaticAuth, TokenSubjectAuth
@@ -22,8 +21,6 @@ from .embedding import Embedder, FastEmbedEmbedder, StubEmbedder
 from .ratelimit import GlobalRateLimiter
 from .retriever import Retriever, VectorRetriever
 from .store import InMemoryStore, Store
-
-logger = logging.getLogger("polymnemo")
 
 
 @dataclass(frozen=True)
@@ -62,17 +59,12 @@ def _build_store() -> Store:
     if settings.database_url:
         from .store.postgres import PostgresStore
 
-        logger.info("Using PostgresStore")
         return PostgresStore(settings.database_url, shared_namespaces=shared)
     if settings.require_database:
         raise RuntimeError(
             "POLYMNEMO_DATABASE_URL is not set but POLYMNEMO_REQUIRE_DATABASE=true. "
             "Provide the database (Neon pooled) connection string."
         )
-    logger.warning(
-        "No POLYMNEMO_DATABASE_URL -> using InMemoryStore (dev/test only; "
-        "NOT durable and NOT shared across instances)."
-    )
     return InMemoryStore(shared_namespaces=shared)
 
 
@@ -84,13 +76,9 @@ def _build_auth() -> Auth:
         # the identity off it. Covers OAuth *and* bearer callers, because the
         # provider funnels both into AccessToken.subject.
         return TokenSubjectAuth()
-    keys = settings.parse_api_keys()
-    if not keys:
-        logger.warning(
-            "auth_backend=bearer but no POLYMNEMO_API_KEYS set; all requests "
-            "will be rejected. Set keys, or use POLYMNEMO_AUTH_BACKEND=static for dev."
-        )
-    return BearerKeyAuth(keys)
+    # An empty key map rejects everything; server.py warns about it once
+    # logging is configured.
+    return BearerKeyAuth(settings.parse_api_keys())
 
 
 def _build_rate_limiter() -> GlobalRateLimiter | None:
@@ -106,7 +94,6 @@ def _build_blob_store() -> BlobStore | None:
     if backend == "s3":
         from .blobstore.s3 import S3BlobStore
 
-        logger.info("Using S3BlobStore (R2)")
         return S3BlobStore(
             bucket=settings.blob_bucket,
             endpoint_url=settings.blob_endpoint_url,

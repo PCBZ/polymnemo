@@ -11,7 +11,11 @@ Disabled by default: ``build_context`` sets ``AppContext.rate_limiter`` to
 
 from __future__ import annotations
 
+import logging
+
 from pyrate_limiter import BucketFullException, Duration, Limiter, Rate
+
+logger = logging.getLogger("polymnemo")
 
 
 class RateLimitError(Exception):
@@ -24,6 +28,7 @@ class GlobalRateLimiter:
     _KEY = "global"
 
     def __init__(self, per_min: int) -> None:
+        self._per_min = per_min
         self._limiter = Limiter(Rate(per_min, Duration.MINUTE))
 
     def check(self, cost: int = 1) -> None:
@@ -32,4 +37,9 @@ class GlobalRateLimiter:
         try:
             self._limiter.try_acquire(self._KEY, weight=cost)
         except BucketFullException as exc:
+            # In the call log this arrives as a ToolError, indistinguishable
+            # from an argument-validation failure. Hitting the bucket means real
+            # users are being turned away — an operational event, not a client
+            # error, and the signal that the limit needs raising.
+            logger.warning("rate limit hit: cost=%d, limit=%d/min", cost, self._per_min)
             raise RateLimitError("rate limit exceeded — please slow down.") from exc

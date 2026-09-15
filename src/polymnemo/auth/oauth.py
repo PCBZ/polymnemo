@@ -9,6 +9,7 @@ took, the ``user_id`` arrives as ``AccessToken.subject``.
 from __future__ import annotations
 
 import asyncio
+import logging
 from collections.abc import Mapping
 from urllib.parse import urlparse, urlunparse
 
@@ -18,6 +19,8 @@ from key_value.aio.stores.postgresql import PostgreSQLStore
 
 from .base import AuthError
 from .tokens import TOKEN_PREFIX, ApiTokenStore
+
+logger = logging.getLogger("polymnemo")
 
 # Created by scripts/schema.sql; shape must match what py-key-value-aio expects.
 OAUTH_KV_TABLE = "oauth_kv"
@@ -65,6 +68,15 @@ class GitHubOAuthProvider(GitHubProvider):
             # Sync store, async caller: keep a slow query off the event loop.
             user_id = await asyncio.to_thread(self._token_store.resolve, token)
         if user_id is None:
+            # The invisible rejection: FastMCP turns this into a 401 at the
+            # transport layer, before any middleware runs, so the call log
+            # cannot see it. Reason only — the token never goes in a log.
+            logger.warning(
+                "bearer auth rejected: %s",
+                "invalid_or_expired"
+                if token.startswith(TOKEN_PREFIX)
+                else "unrecognised",
+            )
             return None  # no scheme recognises it -> 401
         return AccessToken(
             token=token,

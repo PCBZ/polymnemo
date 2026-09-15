@@ -7,9 +7,12 @@ shared token would make namespaces meaningless.
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Mapping
 
 from .base import AuthError
+
+logger = logging.getLogger("polymnemo")
 
 
 class BearerKeyAuth:
@@ -21,6 +24,9 @@ class BearerKeyAuth:
         token = self._bearer_token(headers)
         user_id = self._keys.get(token)
         if user_id is None:
+            # The reason, never the token or any prefix of it: a partial
+            # credential in a log is still credential material.
+            _rejected("unknown_key")
             raise AuthError("Invalid API key")
         return user_id
 
@@ -33,8 +39,21 @@ class BearerKeyAuth:
                 value = val
                 break
         if not value:
+            _rejected("missing_header")
             raise AuthError("Missing Authorization header")
         parts = value.split(None, 1)
         if len(parts) != 2 or parts[0].lower() != "bearer" or not parts[1].strip():
+            _rejected("malformed_header")
             raise AuthError("Expected 'Authorization: Bearer <key>'")
         return parts[1].strip()
+
+
+def _rejected(reason: str) -> None:
+    """One line per rejection.
+
+    WARNING, not ERROR: a single bad key is a client's problem, the *rate* is
+    ours. Until now `auth/` logged nothing at all, so a stale CI token or a
+    credential-stuffing run left no trace anywhere — #123 shipped a bug that
+    401'd every bearer key and the logs showed nothing.
+    """
+    logger.warning("bearer auth rejected: %s", reason)
