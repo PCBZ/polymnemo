@@ -16,8 +16,10 @@ from functools import lru_cache
 from fastmcp import FastMCP
 
 from . import __version__, app, web
+from .auth import BearerKeyAuth
 from .config import settings
 from .logging import CALL_LOGGER, CallLogMiddleware, configure_logging
+from .store import InMemoryStore
 from .tooling import (
     current_user,
     current_user_id,
@@ -304,12 +306,12 @@ def _log_degradations() -> None:
     text even under ``log_format=json``. Re-deriving is the cheaper fix; making
     the context lazy would touch every ``app.ctx`` reference.
     """
-    if type(app.ctx.store).__name__ == "InMemoryStore":
+    if isinstance(app.ctx.store, InMemoryStore):
         logger.warning(
             "Running on InMemoryStore (no POLYMNEMO_DATABASE_URL): not durable, "
             "not shared across instances."
         )
-    if type(app.ctx.auth).__name__ == "BearerKeyAuth" and not settings.parse_api_keys():
+    if isinstance(app.ctx.auth, BearerKeyAuth) and not settings.parse_api_keys():
         logger.warning(
             "auth_backend=bearer but no POLYMNEMO_API_KEYS set; all requests "
             "will be rejected."

@@ -320,7 +320,12 @@ def register(mcp, store: ApiTokenStore | None) -> None:
                 )
                 sub = user_resp.json().get("id")
         except (ValueError, httpx.HTTPError) as exc:  # ValueError: JSONDecodeError
-            logger.warning("token page: GitHub sign-in failed (%s)", type(exc).__name__)
+            # Both: the class alone can't tell a 429 rate-limit from a 503,
+            # and these messages carry only the endpoint and status — the OAuth
+            # `code` travels in the POST body, never in an exception.
+            logger.warning(
+                "token page: GitHub sign-in failed (%s: %s)", type(exc).__name__, exc
+            )
             return _fail_signin("Sign-in failed.")
         if sub is None:
             return _fail_signin("Sign-in failed.")

@@ -44,11 +44,17 @@ def _lines(caplog) -> list[str]:
     return [r.message for r in caplog.records if r.name == log_mod.CALL_LOGGER]
 
 
-def _middleware(user_id=None, **kw):
+def _middleware(user_id=None, new_scope=None, **kw):
     """The resolver is injected, so a test says who the caller is rather than
-    patching a private function."""
+    patching a private function. A stub resolver needs no real scope, so one is
+    supplied to satisfy the pairing rule."""
+    if user_id is not None and new_scope is None:
+        new_scope = lambda: None  # noqa: E731
     return CallLogMiddleware(
-        logger=logging.getLogger(log_mod.CALL_LOGGER), user_id=user_id, **kw
+        logger=logging.getLogger(log_mod.CALL_LOGGER),
+        user_id=user_id,
+        new_scope=new_scope,
+        **kw,
     )
 
 
@@ -500,3 +506,148 @@ class TestTheRealWiring:
         first, second = (json.loads(line) for line in _lines(caplog)[:2])
         assert first["user_id"] == "alice"
         assert "user_id" not in second
+
+
+class TestReviewFixes:
+    """One per finding on #128, asserted at the seam each one broke."""
+
+    def test_a_resolver_without_a_scope_is_refused(self):
+        """Constructing with user_id but no new_scope used to succeed and then
+        emit every line without user_id — no exception, no warning."""
+        with pytest.raises(ValueError, match="new_scope"):
+            CallLogMiddleware(
+                logger=logging.getLogger(log_mod.CALL_LOGGER),
+                user_id=lambda: "alice",
+            )
+
+    def test_a_level_name_that_is_not_a_level_falls_back(self):
+        """`getattr(logging, ...)` finds any attribute: BASIC_FORMAT is a str,
+        and max() against it raised TypeError before a line was ever logged."""
+        log_mod.configure_logging(structured=False, level="BASIC_FORMAT")
+        assert logging.getLogger("polymnemo").level == logging.INFO
+
+    def test_auth_rejections_survive_log_level_error(self):
+        """A 401 never reaches the middleware, so this logger is its only
+        record — LOG_LEVEL=ERROR must not be able to hide a stuffing run."""
+        log_mod.configure_logging(structured=False, level="ERROR")
+        assert logging.getLogger("polymnemo").level == logging.ERROR
+        assert logging.getLogger(log_mod.AUTH_LOGGER).isEnabledFor(logging.WARNING)
+
+    def test_lowering_the_level_still_reaches_the_auth_logger(self):
+        log_mod.configure_logging(structured=False, level="DEBUG")
+        assert logging.getLogger(log_mod.AUTH_LOGGER).isEnabledFor(logging.DEBUG)
+
+    def test_an_empty_tool_name_is_reported_not_dropped(self):
+        context = SimpleNamespace(
+            type="request",
+            method="tools/call",
+            source="client",
+            message=SimpleNamespace(name=""),
+        )
+        assert log_mod._target(context) == ""
+
+    async def test_a_hung_call_still_leaves_a_trace(self, caplog, monkeypatch):
+        """Dropping the `*_start` half means a call that never returns never
+        reaches a completion line either — it was invisible."""
+        import asyncio
+
+        monkeypatch.setattr(log_mod, "SLOW_CALL_SECONDS", 0.01)
+        mw = _middleware()
+
+        async def never_returns(context):
+            await asyncio.sleep(5)
+
+        with caplog.at_level(logging.WARNING):
+            task = asyncio.ensure_future(mw.on_message(_context(), never_returns))
+            await asyncio.sleep(0.1)
+            entry = json.loads(_lines(caplog)[0])
+            task.cancel()
+        assert entry["event"] == "request_in_flight"
+        assert entry["target"] == "remember"
+
+    async def test_a_normal_call_leaves_no_in_flight_line(self, caplog):
+        with caplog.at_level(logging.WARNING):
+            await _middleware().on_message(_context(), _ok)
+        assert not [ln for ln in _lines(caplog) if "in_flight" in ln]
+
+
+class TestTokenStoreAbsentIsSaidPlainly:
+    async def test_no_database_is_not_reported_as_expired(self, caplog, monkeypatch):
+        """With no store the token is never looked up, so calling it expired
+        sends an operator hunting a revocation problem that doesn't exist."""
+        from fastmcp.server.auth.providers.github import GitHubProvider
+
+        from polymnemo.auth.oauth import GitHubOAuthProvider
+
+        async def _no_oauth(self, token):
+            return None
+
+        monkeypatch.setattr(GitHubProvider, "verify_token", _no_oauth)
+        provider = GitHubOAuthProvider(
+            client_id="id", client_secret="secret", base_url="https://e.test"
+        )
+        with caplog.at_level(logging.WARNING):
+            assert await provider.verify_token("pmn_whatever") is None
+        line = next(r.message for r in caplog.records if "rejected" in r.message)
+        assert "no_token_store" in line
+        assert "expired" not in line
+
+
+class TestScopeIsCreatedOnDemand:
+    def test_authenticating_without_a_scope_still_records(self, monkeypatch):
+        """`_REQUEST.get({})` handed back a throwaway dict, so the write was a
+        no-op and the identity vanished — silently, for any path that reaches
+        current_user without the middleware."""
+        from polymnemo import tooling
+
+        monkeypatch.setattr(
+            app,
+            "ctx",
+            SimpleNamespace(auth=SimpleNamespace(authenticate=lambda h: "alice")),
+            raising=False,
+        )
+        tooling._REQUEST.set(None)  # no middleware ran
+        assert tooling.current_user() == "alice"
+        assert tooling.current_user_id() == "alice"
+
+
+class TestDegradationChecksSurviveSubclassing:
+    def test_a_subclass_of_the_in_memory_store_still_warns(self, caplog, monkeypatch):
+        """`type(x).__name__ == "InMemoryStore"` passed silently for a subclass
+        or after any rename, so the warning would just stop appearing."""
+        from polymnemo import server
+        from polymnemo.store import InMemoryStore
+
+        class TracingInMemoryStore(InMemoryStore):
+            pass
+
+        monkeypatch.setattr(
+            app,
+            "ctx",
+            SimpleNamespace(
+                store=TracingInMemoryStore(shared_namespaces=[]),
+                auth=SimpleNamespace(),
+            ),
+            raising=False,
+        )
+        with caplog.at_level(logging.WARNING):
+            server._log_degradations()
+        assert [r for r in caplog.records if "InMemoryStore" in r.message]
+
+
+class TestSignInFailureKeepsTheDetail:
+    def test_the_message_is_logged_not_just_the_class(self, caplog):
+        """A class name can't tell a 429 rate-limit from a 503 outage; these
+        messages carry only the endpoint and status."""
+        import httpx
+
+        from polymnemo import web
+
+        exc = httpx.ConnectTimeout("timed out reaching api.github.com")
+        with caplog.at_level(logging.WARNING):
+            web.logger.warning(
+                "token page: GitHub sign-in failed (%s: %s)", type(exc).__name__, exc
+            )
+        line = caplog.records[0].getMessage()
+        assert "ConnectTimeout" in line
+        assert "api.github.com" in line

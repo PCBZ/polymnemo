@@ -10,9 +10,10 @@ from __future__ import annotations
 import logging
 from collections.abc import Mapping
 
+from ..logging import AUTH_LOGGER
 from .base import AuthError
 
-logger = logging.getLogger("polymnemo")
+logger = logging.getLogger(AUTH_LOGGER)
 
 
 class BearerKeyAuth:

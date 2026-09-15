@@ -26,12 +26,28 @@ from .ratelimit import RateLimitError
 # value: each task gets its own copy of the context, so concurrent requests
 # can't see each other's, and mutating the dict (rather than rebinding the var)
 # is visible to the caller even when a sync tool runs in a worker thread.
-_REQUEST: ContextVar[dict[str, str]] = ContextVar("request_scope")
+_REQUEST: ContextVar[dict[str, str] | None] = ContextVar("request_scope", default=None)
 
 
 def new_request_scope() -> None:
     """Start a request's scope. Called once per call, before the tool runs."""
     _REQUEST.set({})
+
+
+def _scope() -> dict[str, str]:
+    """This request's scope, creating one if the caller never opened it.
+
+    ``_REQUEST.get({})`` would hand back a throwaway dict, so writing to it is a
+    no-op and the identity vanishes with no error — which is what happens to any
+    path that reaches ``current_user`` without the middleware, such as a test or
+    a background task. Binding it here makes the write land instead. The binding
+    is task-local, so this cannot leak one request's identity into another.
+    """
+    scope = _REQUEST.get(None)
+    if scope is None:
+        scope = {}
+        _REQUEST.set(scope)
+    return scope
 
 
 def current_user_id() -> str | None:
@@ -41,7 +57,8 @@ def current_user_id() -> str | None:
     again, so a caller (the call log) can name the identity without re-running
     authentication or being able to trigger its side effects.
     """
-    return _REQUEST.get({}).get("user_id")
+    scope = _REQUEST.get(None)
+    return scope.get("user_id") if scope else None
 
 
 def current_user() -> str:
@@ -55,7 +72,7 @@ def current_user() -> str:
         user_id = app.ctx.auth.authenticate(headers)
     except AuthError as exc:
         raise ToolError(f"Authentication failed: {exc}") from exc
-    _REQUEST.get({})["user_id"] = user_id
+    _scope()["user_id"] = user_id
     return user_id
 
 
