@@ -8,6 +8,7 @@ took, the ``user_id`` arrives as ``AccessToken.subject``.
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Mapping
 from urllib.parse import urlparse, urlunparse
 
@@ -16,6 +17,7 @@ from fastmcp.server.dependencies import AccessToken, get_access_token
 from key_value.aio.stores.postgresql import PostgreSQLStore
 
 from .base import AuthError
+from .tokens import ApiTokenStore
 
 # Created by scripts/schema.sql; shape must match what py-key-value-aio expects.
 OAUTH_KV_TABLE = "oauth_kv"
@@ -31,18 +33,33 @@ class GitHubOAuthProvider(GitHubProvider):
     schemes can live, hence the only override.
     """
 
-    def __init__(self, *args, static_keys: Mapping[str, str] | None = None, **kwargs):
+    def __init__(
+        self,
+        *args,
+        static_keys: Mapping[str, str] | None = None,
+        token_store: ApiTokenStore | None = None,
+        **kwargs,
+    ):
         super().__init__(*args, **kwargs)
         # {api_key -> user_id}; empty means OAuth is the only way in.
         self._static_keys = dict(static_keys or {})
+        # Self-service tokens (#125). None when there's no database.
+        self._token_store = token_store
 
     async def verify_token(self, token: str) -> AccessToken | None:
         oauth = await super().verify_token(token)
         if oauth is not None:
             return oauth
+        # Env keys before the database: they're the escape hatch, so they must
+        # not depend on the thing that might be down, and a dict lookup beats a
+        # query anyway.
         user_id = self._static_keys.get(token)
+        if user_id is None and self._token_store is not None:
+            # The store is sync; verify_token is async. Off the event loop so a
+            # slow query can't stall every other in-flight request.
+            user_id = await asyncio.to_thread(self._token_store.resolve, token)
         if user_id is None:
-            return None  # neither scheme recognises it -> 401
+            return None  # no scheme recognises it -> 401
         return AccessToken(
             token=token,
             client_id=BEARER_CLIENT_ID,

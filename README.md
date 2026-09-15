@@ -64,7 +64,7 @@ without touching the tools:
 |-------|---------|----------|
 | **Store** | `PostgresStore` (pgvector) | `InMemoryStore` (dev/tests) |
 | **Embedder** | `fastembed` (local ONNX) | `StubEmbedder` (offline) |
-| **Auth** | per-user bearer keys | static single-user (dev) |
+| **Auth** | GitHub OAuth + API tokens | static bearer keys (dev) |
 | **Retriever** | `VectorRetriever` | your own ranker |
 | **BlobStore** | S3 / R2 | off |
 | **RateLimiter** | global token bucket | off |
@@ -150,8 +150,14 @@ npx @modelcontextprotocol/inspector
 
 ## Concepts
 
-- **Users & keys** — each bearer key maps to a `user_id`; writes are owner-scoped
-  (you can only edit or delete your own memories).
+- **Users & keys** — sign in with GitHub, or present a bearer token. Either way
+  the request resolves to a `user_id`, and writes are owner-scoped (you can only
+  edit or delete your own memories).
+- **Headless clients** — CI, cron jobs and server-side agents can't complete a
+  browser sign-in, so they use an API token instead. Sign in with GitHub at
+  **`<server>/tokens`** to create, list and revoke them; a new token is shown
+  once and stored only as a SHA-256 hash. Deliberately *not* MCP tools — a
+  secret must never travel an LLM channel.
 - **Namespaces** — memories live in namespaces. A *shared* namespace (default
   `shared`) is readable by everyone ("born shared"); everything else is private
   to its owner. Sessions and media default to private namespaces.
