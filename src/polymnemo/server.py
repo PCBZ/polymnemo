@@ -15,7 +15,7 @@ from functools import lru_cache
 
 from fastmcp import FastMCP
 
-from . import __version__, app, web
+from . import __version__, app, observability, web
 from .config import settings
 from .tooling import current_user, rate_limited, tool_errors
 
@@ -290,15 +290,15 @@ def namespace_collection(namespace: str) -> dict:
 
 def main() -> None:
     """Console-script entry point: run the server over Streamable HTTP."""
-    # Root stays at INFO so third-party libs (SQLAlchemy, uvicorn, …) don't flood
-    # when we turn our own logging up; POLYMNEMO_LOG_LEVEL only moves the
-    # `polymnemo` logger (e.g. DEBUG to land the #96 read-payload observe lines).
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
-    )
-    logging.getLogger("polymnemo").setLevel(
-        getattr(logging, settings.log_level.upper(), logging.INFO)
+    structured = settings.log_format.lower() == "json"
+    observability.configure_logging(structured=structured, level=settings.log_level)
+    # One structured line per call (#93). Registered here rather than at import
+    # so tests that import `mcp` don't inherit it.
+    mcp.add_middleware(
+        observability.CallLogMiddleware(
+            logger=logging.getLogger(observability.CALL_LOGGER),
+            structured=structured,
+        )
     )
     logger.info(
         "Starting polymnemo MCP server at http://%s:%s%s",

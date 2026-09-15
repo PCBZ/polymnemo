@@ -36,6 +36,11 @@ class Settings(BaseSettings):
     # Azure Log Analytics for measurement; keep INFO in normal production.
     log_level: str = "INFO"
 
+    # "json" emits one structured line per call for log-based metrics (#93);
+    # "text" keeps it readable. Defaults to text, like log_level defaults to
+    # INFO — production opts in via a Container App env var.
+    log_format: str = "text"
+
     # --- HTTP transport ------------------------------------------------------
     host: str = "127.0.0.1"
     # Prefer POLYMNEMO_PORT; fall back to Cloud Run's injected PORT; then 8000.
