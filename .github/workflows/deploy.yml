@@ -10,13 +10,22 @@ name: deploy (azure)
 #
 # Job graph (GitHub renders this live in the run's "graph" view):
 #
-#   neon --> schema --+--> azure <-- r2
-#                     '--> test
+#   neon --> schema --+--> test ------> azure-test --> smoke(test) --> azure --> smoke(prod)
+#                     '--> azure          ^                          ^
+#   r2 -------------------> azure         |                          |
+#   r2-test ------------------------------'                          |
+#   build (image) ---------------------------------------------------'
 #
-# neon and r2 run in parallel. schema waits for neon; azure waits for r2 + schema
-# (neon is covered transitively via schema, and the app never starts before its
-# tables exist). test branches off the same schema and runs beside azure, so a
-# problem with the measurement branch can never hold up the prod deploy.
+# The shape that matters: smoke(test) is a GATE. The prod apply needs it, so a
+# revision that fails a route contract or stops emitting its call log never
+# reaches production — which is exactly how #123 shipped a service where every
+# bearer key 401'd. smoke(prod) runs after, read-only, as the final word.
+#
+# test/ and r2-test/ give the test app its own database branch and media bucket:
+# same structure as prod, isolated data. The image is built ONCE and both
+# deployments run that identical artifact — promoting is a second apply of the
+# same tag, never a rebuild.
+
 on:
   push:
     tags: ["v*"]
@@ -111,15 +120,16 @@ jobs:
           conn="$(terraform output -raw connection_uri)"
           psql "$conn" -v ON_ERROR_STOP=1 -f ../../../scripts/schema.sql
 
-  azure:
-    name: azure (build image + deploy app)
-    needs: [r2, schema]
+  build:
+    name: build (image)
     runs-on: ubuntu-latest
     timeout-minutes: 30
     # `packages: write` lets this job push the image to GHCR with GITHUB_TOKEN.
     permissions:
       contents: read
       packages: write
+    outputs:
+      image: ${{ steps.ref.outputs.image }}
     steps:
       - uses: actions/checkout@v4
       # ACR Tasks are blocked on personal/student subscriptions, so build the
@@ -127,7 +137,11 @@ jobs:
       # Tag = the version on a v* tag, else the dispatch input, else the SHA.
       # Context values go through env (not straight into run:) to avoid shell
       # injection from a crafted tag/dispatch input.
+      #
+      # Built once, deployed twice: test and prod run the SAME image reference,
+      # so the gate below tests the artifact that ships rather than a rebuild.
       - name: Resolve image reference
+        id: ref
         env:
           REF_TYPE: ${{ github.ref_type }}
           REF_NAME: ${{ github.ref_name }}
@@ -139,7 +153,7 @@ jobs:
           elif [ -n "$INPUT_TAG" ]; then tag="$INPUT_TAG"
           else tag="$SHA"; fi
           image="ghcr.io/${OWNER,,}/polymnemo:${tag}"
-          echo "TF_VAR_image=$image" >> "$GITHUB_ENV"
+          echo "image=$image" >> "$GITHUB_OUTPUT"
           # Tags to push: the versioned/SHA ref always; also move :latest ONLY on a
           # v* release, so the GCP backup's `latest` means "last released", not a
           # branch/SHA test build from a dispatch run.
@@ -166,12 +180,74 @@ jobs:
           tags: ${{ env.IMAGE_TAGS }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+  # The test app's own media bucket, so a blob written against test never lands
+  # beside production media. Parallel with everything else; nothing depends on
+  # it but azure-test.
+  r2-test:
+    name: r2-test (test media bucket)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.13.2"
+      - name: Terraform apply
+        working-directory: deploy/terraform/r2-test
+        run: |
+          terraform init $TF_BACKEND -backend-config=key=r2-test.tfstate
+          terraform apply -auto-approve
+
+  # Same structure as prod, isolated data: the Neon branch from `test` and the
+  # bucket from `r2-test`. It attaches to prod's Container App Environment
+  # because the subscription allows one per region — see the root's main.tf.
+  azure-test:
+    name: azure-test (deploy test app)
+    needs: [build, test, r2-test]
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.13.2"
+      - name: Terraform apply (deploy test app)
+        working-directory: deploy/terraform/azure-test
+        env:
+          TF_VAR_image: ${{ needs.build.outputs.image }}
+          TF_VAR_api_keys: ${{ secrets.POLYMNEMO_TEST_API_KEYS }}
+          TF_VAR_revision_suffix: r${{ github.run_id }}-${{ github.run_attempt }}
+        run: |
+          terraform init $TF_BACKEND -backend-config=key=azure-test.tfstate
+          terraform apply -auto-approve
+          url="$(terraform output -raw service_url)"
+          echo "Test MCP endpoint: ${url}/mcp"
+          ../../../scripts/wait-for-app.sh "$url"
+
+  # THE GATE. Prod waits on this.
+  smoke-test:
+    name: smoke (test)
+    needs: [azure-test]
+    uses: ./.github/workflows/smoke.yml
+    with:
+      environment: test
+    secrets: inherit
+
+  azure:
+    name: azure (deploy prod app)
+    needs: [build, r2, schema, smoke-test]
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
       - uses: hashicorp/setup-terraform@v3
         with:
           terraform_version: "1.13.2"
       - name: Terraform apply (deploy app)
         working-directory: deploy/terraform/azure
         env:
+          TF_VAR_image: ${{ needs.build.outputs.image }}
           # A fresh revision suffix every run forces a real rollout even when the
           # image ref is unchanged (e.g. re-deploying a tag after making the GHCR
           # package Public). run_id-run_attempt is unique across re-runs.
@@ -182,24 +258,18 @@ jobs:
           url="$(terraform output -raw service_url)"
           echo "MCP endpoint: ${url}/mcp"
           # The app pulls a PUBLIC image with no credentials, so a private/
-          # misconfigured package would be a green-but-broken apply. Poll the app
-          # until it answers (any HTTP status = the container started & pulled)
-          # and fail the job loudly otherwise.
-          echo "Waiting for the app at $url to come up…"
-          for i in $(seq 1 30); do
-            # On a failed/timed-out request curl exits non-zero; overwrite (not
-            # append) so code is a clean "000", never a false-positive like
-            # "000000". Only a real app response (2xx/3xx/4xx) counts as up — a
-            # 000 (no reply) or 5xx (no healthy backend) keeps waiting.
-            code=$(curl -sS -o /dev/null -w '%{http_code}' --max-time 10 "$url") || code=000
-            echo "  [$i] HTTP $code"
-            case "$code" in
-              2??|3??|4??) echo "App is up (HTTP $code)."; exit 0 ;;
-            esac
-            sleep 10
-          done
-          echo "::error::App never responded (~5 min) — check the container logs."
-          exit 1
+          # misconfigured package would be a green-but-broken apply.
+          ../../../scripts/wait-for-app.sh "$url"
+
+  # Read-only, and after the fact: the gate already passed on the same image, so
+  # this is confirmation that prod's own configuration matches.
+  smoke-prod:
+    name: smoke (prod)
+    needs: [azure]
+    uses: ./.github/workflows/smoke.yml
+    with:
+      environment: prod
+    secrets: inherit
 
   # The #89/#96 measurement branch: a copy-on-write Neon branch of prod, so a
   # locally-run DEBUG server has somewhere to read and write without touching

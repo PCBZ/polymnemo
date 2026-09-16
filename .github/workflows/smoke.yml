@@ -1,0 +1,150 @@
+name: smoke
+
+# Post-deploy checks against a *running* deployment (#129).
+#
+# A `terraform apply` is called good as soon as the app returns any HTTP status,
+# which only proves the container started. #123 (every bearer key 401'd) and
+# #128 (token pages 404, POLYMNEMO_LOG_FORMAT never injected) both cleared that
+# bar. These jobs assert the contracts that live in configuration, where
+# in-process tests cannot reach.
+#
+#   resolve --> endpoints --> logs
+#
+# `logs` runs second on purpose: it drives no traffic of its own, it looks for
+# the lines the `endpoints` job just produced.
+#
+# `environment` picks which deployment to check. On `test` this is a GATE — the
+# prod apply waits on it — so a failure here keeps a bad revision off prod.
+on:
+  workflow_call:
+    inputs:
+      environment:
+        description: "Which deployment to check: test or prod."
+        type: string
+        required: true
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: "Which deployment to check."
+        type: choice
+        options: [test, prod]
+        default: test
+
+permissions:
+  contents: read
+
+env:
+  ARM_CLIENT_ID: ${{ secrets.ARM_CLIENT_ID }}
+  ARM_CLIENT_SECRET: ${{ secrets.ARM_CLIENT_SECRET }}
+  ARM_TENANT_ID: ${{ secrets.ARM_TENANT_ID }}
+  ARM_SUBSCRIPTION_ID: ${{ secrets.ARM_SUBSCRIPTION_ID }}
+  TF_BACKEND: >-
+    -backend-config=resource_group_name=${{ vars.TFSTATE_RESOURCE_GROUP }}
+    -backend-config=storage_account_name=${{ vars.TFSTATE_STORAGE_ACCOUNT }}
+    -backend-config=container_name=${{ vars.TFSTATE_CONTAINER }}
+
+jobs:
+  # Read the deployment's own coordinates out of Terraform state rather than
+  # threading them in as inputs, so `workflow_dispatch` works exactly like the
+  # call from deploy.yml and there is one source of truth for the app's URL.
+  resolve:
+    name: resolve (${{ inputs.environment }} coordinates)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      base_url: ${{ steps.tf.outputs.base_url }}
+      app_name: ${{ steps.tf.outputs.app_name }}
+      workspace: ${{ steps.tf.outputs.workspace }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.13.2"
+      - id: tf
+        env:
+          TARGET: ${{ inputs.environment }}
+        run: |
+          case "$TARGET" in
+            test) dir=deploy/terraform/azure-test; key=azure-test.tfstate ;;
+            prod) dir=deploy/terraform/azure;      key=azure.tfstate ;;
+            *) echo "::error::unknown environment '$TARGET' (want test or prod)"; exit 1 ;;
+          esac
+          cd "$dir"
+          terraform init $TF_BACKEND "-backend-config=key=$key"
+          base_url="$(terraform output -raw service_url)"
+          app_name="$(terraform output -raw app_name)"
+          workspace="$(terraform output -raw log_workspace_id)"
+          # A missing output makes `terraform output` fail, but the command
+          # substitution around it does not fail the `echo` — so without this
+          # the empty value reaches the suite, which skips itself for lack of
+          # configuration and the whole check passes having asserted nothing.
+          for pair in "service_url=$base_url" "app_name=$app_name" \
+                      "log_workspace_id=$workspace"; do
+            [ -n "${pair#*=}" ] || {
+              echo "::error::terraform output ${pair%%=*} is empty — is $TARGET deployed?"
+              exit 1
+            }
+          done
+          {
+            echo "base_url=$base_url"
+            echo "app_name=$app_name"
+            echo "workspace=$workspace"
+          } >> "$GITHUB_OUTPUT"
+
+  endpoints:
+    name: endpoints (${{ inputs.environment }} route contracts)
+    needs: [resolve]
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      # Only what the HTTP checks need. Installing the package would drag in the
+      # embedding model for a suite that never imports polymnemo.
+      - run: pip install pytest pytest-asyncio httpx
+      - name: Assert every route's contract
+        env:
+          TARGET: ${{ inputs.environment }}
+          TEST_KEY: ${{ secrets.POLYMNEMO_TEST_SMOKE_KEY }}
+          PROD_KEY: ${{ secrets.POLYMNEMO_SMOKE_KEY }}
+          POLYMNEMO_SMOKE_URL: ${{ needs.resolve.outputs.base_url }}
+        run: |
+          # Picked explicitly, never with a `&&/||` fallback: an unset test key
+          # would fall through to the prod key and quietly point production
+          # credentials at the test app.
+          if [ "$TARGET" = test ]; then
+            export POLYMNEMO_SMOKE_KEY="$TEST_KEY"
+          else
+            export POLYMNEMO_SMOKE_KEY="$PROD_KEY"
+          fi
+          # The suite skips itself when unconfigured so the offline unit tests
+          # stay runnable, and that is exactly how a post-deploy check goes green
+          # while asserting nothing — the #128 failure mode again.
+          [ -n "$POLYMNEMO_SMOKE_KEY" ] || {
+            echo "::error::no smoke key configured for '$TARGET' — every"\
+              "authenticated check would silently skip. It must also appear in"\
+              "that deployment's API key list."
+            exit 1
+          }
+          pytest tests/smoke/test_endpoints.py -v -o addopts=""
+
+  logs:
+    name: logs (${{ inputs.environment }} structured output)
+    needs: [resolve, endpoints]
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install pytest pytest-asyncio httpx
+      # No `az login` step: the suite calls the Log Analytics query API over
+      # HTTP and gets its own token from the ARM_* values already in `env`.
+      - name: Assert the logs arrive in the expected shape
+        env:
+          POLYMNEMO_SMOKE_WORKSPACE: ${{ needs.resolve.outputs.workspace }}
+          POLYMNEMO_SMOKE_APP: ${{ needs.resolve.outputs.app_name }}
+        run: pytest tests/smoke/test_logs.py -v -o addopts=""

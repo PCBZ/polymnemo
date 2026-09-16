@@ -125,3 +125,26 @@ variable "max_replicas" {
   default     = 3
   description = "Max replicas under load."
 }
+
+# --- Attaching to an existing platform ---------------------------------------
+# Set all three together to put this app next to one that already exists, rather
+# than creating a resource group / workspace / environment of its own. The test
+# app does this because the subscription allows one managed environment per
+# region. Leave them empty (the default) to create the platform.
+variable "existing_environment_id" {
+  description = "Container App Environment to attach to. Empty creates one."
+  type        = string
+  default     = ""
+}
+
+variable "existing_environment_name" {
+  description = "Name of that environment, for looking up its default domain."
+  type        = string
+  default     = ""
+}
+
+variable "existing_log_workspace_name" {
+  description = "Name of the Log Analytics workspace that environment logs to."
+  type        = string
+  default     = ""
+}
