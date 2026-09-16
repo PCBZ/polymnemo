@@ -9,13 +9,19 @@
 #
 # Values are piped straight to `gh` — never printed, never echoed. The fill-in
 # file holds real secrets: it is gitignored, and this script offers to delete it
-# when done. Every key here is a secret. Leave a value blank in the file to skip
-# it.
+# when done. Leave a value blank in the file to skip it.
+#
+# Keys listed in VARS below are pushed as GitHub *variables* (readable in logs,
+# referenced as `vars.X`); everything else is pushed as a *secret* (`secrets.X`).
 
 set -euo pipefail
 
 FILE="${1:-scripts/github-secrets.env}"
-VARS=" " # space-delimited set of keys that are variables, not secrets (none now)
+# Space-delimited, with leading/trailing spaces — the membership test below is a
+# substring match on " $key ". These are `vars.X` in the workflows; the rest are
+# `secrets.X`. Getting this wrong pushes a value to the wrong store and the
+# workflow reads an empty string, so keep it in step with .github/workflows/.
+VARS=" TFSTATE_RESOURCE_GROUP TFSTATE_STORAGE_ACCOUNT TFSTATE_CONTAINER GCP_PROJECT_ID GEMINI_MODEL "
 
 command -v gh >/dev/null || { echo "error: gh (GitHub CLI) not installed." >&2; exit 1; }
 gh auth status >/dev/null 2>&1 || { echo "error: run 'gh auth login' first." >&2; exit 1; }
