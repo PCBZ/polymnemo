@@ -57,3 +57,26 @@ def service() -> MemoryService:
     blob store injected so the media tools are exercisable."""
     ctx = replace(build_context(), blob_store=FakeBlobStore())
     return MemoryService(ctx)
+
+
+@pytest.fixture
+def restore_loggers():
+    """Undo what `configure_logging` does to global logger state.
+
+    Shared rather than copied into each test class: the two copies it replaces
+    were byte-identical, which is exactly the drift this guards against.
+    """
+    import logging
+
+    from polymnemo import logging as log_mod
+
+    names = ("", "polymnemo", log_mod.CALL_LOGGER, log_mod.AUTH_LOGGER)
+    saved = [(logging.getLogger(n), logging.getLogger(n).level) for n in names]
+    root = logging.getLogger()
+    handlers = list(root.handlers)
+    yield
+    for log, level in saved:
+        log.setLevel(level)
+    # basicConfig(force=True) swaps root's handler for a fresh one; restoring
+    # levels alone leaks it into every later test.
+    root.handlers = handlers

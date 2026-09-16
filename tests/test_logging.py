@@ -50,6 +50,8 @@ def _middleware(user_id=None, new_scope=None, **kw):
     supplied to satisfy the pairing rule."""
     if user_id is not None and new_scope is None:
         new_scope = lambda: None  # noqa: E731
+    elif new_scope is not None and user_id is None:
+        user_id = lambda: None  # noqa: E731
     return CallLogMiddleware(
         logger=logging.getLogger(log_mod.CALL_LOGGER),
         user_id=user_id,
@@ -202,18 +204,12 @@ class TestRequestScope:
         assert tooling.current_user_id() is None
 
 
+@pytest.mark.usefixtures("restore_loggers")
 class TestConfigureLogging:
     """`basicConfig` is a no-op once root has a handler, and something else does
     install one before the entry point runs — so without `force=True` the format
     is silently ignored and every json line arrives with an
     `INFO:polymnemo.calls:` prefix in front of the object."""
-
-    @pytest.fixture(autouse=True)
-    def _restore_root(self):
-        root = logging.getLogger()
-        saved = list(root.handlers), root.level
-        yield
-        root.handlers, root.level = saved[0], saved[1]
 
     def _fmt(self) -> str | None:
         handler = logging.getLogger().handlers[0]
@@ -508,21 +504,9 @@ class TestTheRealWiring:
         assert "user_id" not in second
 
 
+@pytest.mark.usefixtures("restore_loggers")
 class TestReviewFixes:
     """One per finding on #128, asserted at the seam each one broke."""
-
-    @pytest.fixture(autouse=True)
-    def _restore_loggers(self):
-        """These call configure_logging for real. Without restoring, a level set
-        here leaks into every later test in the session."""
-        names = ("", "polymnemo", log_mod.CALL_LOGGER, log_mod.AUTH_LOGGER)
-        saved = [(logging.getLogger(n), logging.getLogger(n).level) for n in names]
-        root = logging.getLogger()
-        handlers = list(root.handlers)
-        yield
-        for log, level in saved:
-            log.setLevel(level)
-        root.handlers = handlers
 
     def test_a_resolver_without_a_scope_is_refused(self):
         """Constructing with user_id but no new_scope used to succeed and then
@@ -532,7 +516,7 @@ class TestReviewFixes:
                 logger=logging.getLogger(log_mod.CALL_LOGGER),
                 user_id=lambda: "alice",
             )
-        assert str(caught.value) == "pass both user_id and new_scope, or neither"
+        assert str(caught.value) == log_mod.SCOPE_PAIR_ERROR
 
     def test_a_level_name_that_is_not_a_level_falls_back(self):
         """`getattr(logging, ...)` finds any attribute: BASIC_FORMAT is a str,
@@ -580,8 +564,9 @@ class TestReviewFixes:
                 await task  # awaited, or pytest reports a destroyed pending task
         assert entry["event"] == "request_in_flight"
         assert entry["target"] == "remember"
-        # Measured, not the threshold echoed back.
-        assert entry["elapsed_ms"] >= 10
+        # Two-sided, like its sibling: a µs/ms mix-up gives ~10_000 here and
+        # would sail past a lower bound alone.
+        assert 10 <= entry["elapsed_ms"] <= 500
         assert entry["source"] == "client"
 
     async def test_a_normal_call_leaves_no_in_flight_line(self, caplog):
@@ -654,36 +639,9 @@ class TestDegradationChecksSurviveSubclassing:
         assert [r for r in caplog.records if "InMemoryStore" in r.message]
 
 
-class TestSignInFailureKeepsTheDetail:
-    def test_the_handler_logs_the_message_not_just_the_class(self, caplog):
-        """Asserted against web.py's own source, not by calling logger.warning
-        with the format string here — that would only prove that Python
-        interpolates, and would stay green if web.py reverted to the class
-        alone."""
-        import inspect
-
-        from polymnemo import web
-
-        source = inspect.getsource(web)
-        assert '"token page: GitHub sign-in failed (%s: %s)"' in source
-        assert "type(exc).__name__, exc" in source
-
-
+@pytest.mark.usefixtures("restore_loggers")
 class TestSecondReviewFixes:
     """One per finding on the second pass over #128."""
-
-    @pytest.fixture(autouse=True)
-    def _restore_loggers(self):
-        names = ("", "polymnemo", log_mod.CALL_LOGGER, log_mod.AUTH_LOGGER)
-        saved = [(logging.getLogger(n), logging.getLogger(n).level) for n in names]
-        root = logging.getLogger()
-        handlers = list(root.handlers)
-        yield
-        for log, level in saved:
-            log.setLevel(level)
-        # configure_logging runs basicConfig(force=True), which swaps root's
-        # handler for a fresh one; restoring levels alone leaks it.
-        root.handlers = handlers
 
     def test_a_scope_without_a_resolver_is_refused(self):
         """The guard was one-directional: new_scope alone opened a scope for
@@ -693,9 +651,17 @@ class TestSecondReviewFixes:
                 logger=logging.getLogger(log_mod.CALL_LOGGER),
                 new_scope=lambda: None,
             )
-        # Symmetric wording: "user_id requires new_scope" would tell this caller
-        # to add the thing they already passed.
-        assert str(caught.value) == "pass both user_id and new_scope, or neither"
+        # Against the shared constant, so rewording is a one-line change.
+        assert str(caught.value) == log_mod.SCOPE_PAIR_ERROR
+
+    def test_the_message_names_both_and_implies_no_direction(self):
+        """The shared constant keeps the raise site and the assertions in sync,
+        but that means any wording passes them. This pins the property the
+        wording has to have: it can't tell a caller to add the argument they
+        already passed."""
+        message = log_mod.SCOPE_PAIR_ERROR
+        assert "user_id" in message and "new_scope" in message
+        assert "requires" not in message, "one-directional phrasing is misleading"
 
     def test_neither_is_still_allowed(self):
         CallLogMiddleware(logger=logging.getLogger(log_mod.CALL_LOGGER))
@@ -765,16 +731,24 @@ class TestSecondReviewFixes:
         `asyncio.create_task` from `get_running_loop().create_task`."""
         import asyncio
 
+        # Short, so the spied task isn't a real 10-second one left pending.
+        monkeypatch.setattr(log_mod, "SLOW_CALL_SECONDS", 0.01)
         real = asyncio.create_task
         scheduled = []
 
         def spy(coro, **kw):
+            task = real(coro, **kw)
             scheduled.append(coro)
-            return real(coro, **kw)
+            return task
 
         monkeypatch.setattr(asyncio, "create_task", spy)
         await _middleware().on_message(_context(), _ok)
-        assert scheduled, "the watchdog was never scheduled"
+        # Identity, not count: any other create_task call satisfies `assert
+        # scheduled` on its own.
+        assert any(
+            c.cr_code.co_qualname.endswith("_note_if_still_running") for c in scheduled
+        ), "the watchdog coroutine was never scheduled"
+        await asyncio.sleep(0)  # let the cancellation land before teardown
 
 
 class TestSlowCallLogsTwiceOnPurpose:

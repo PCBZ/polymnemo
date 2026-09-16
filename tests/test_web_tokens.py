@@ -9,6 +9,7 @@ attacker's account.
 from __future__ import annotations
 
 import json
+import logging
 import time
 from datetime import UTC, datetime, timedelta
 
@@ -251,3 +252,72 @@ class TestRevokeFeedback:
         handler = self._handler(monkeypatch, self._Store(True))
         response = await handler(self._request())
         assert response.status_code == 302
+
+
+class TestSignInFailureIsDiagnosable:
+    """Drives `tokens_callback` with a client that fails, because asserting on
+    web.py's source only proved the literal appears somewhere in the file —
+    even in unreachable code — and the deleted alternative asserted nothing
+    but that httpx renders its own constructor argument."""
+
+    class _Request:
+        def __init__(self, state: str, cookie: str) -> None:
+            self.cookies = {web.STATE_COOKIE: cookie}
+            self.headers = {"host": "e.test"}
+            self.url = type("U", (), {"scheme": "https"})()
+            self.query_params = {"code": "abc", "state": state}
+
+    def _callback(self, monkeypatch):
+        monkeypatch.setattr(web.settings, "oauth_client_id", "id")
+        monkeypatch.setattr(web.settings, "oauth_base_url", "https://e.test")
+        recorder = _RouteRecorder()
+        web.register(recorder, None)
+        return recorder.handlers["/tokens/callback"]
+
+    def _request(self):
+        state = "s3cr3t-state"
+        return self._Request(state, web._sign(state))
+
+    async def test_the_exception_message_reaches_the_log(self, caplog, monkeypatch):
+        import httpx
+
+        class _Failing:
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *a):
+                return False
+
+            async def post(self, *a, **kw):
+                raise httpx.ConnectTimeout("timed out reaching api.github.com")
+
+        monkeypatch.setattr(httpx, "AsyncClient", lambda **kw: _Failing())
+        handler = self._callback(monkeypatch)
+        with caplog.at_level(logging.WARNING):
+            response = await handler(self._request())
+        assert response.status_code == 400
+        line = next(
+            r.getMessage() for r in caplog.records if "sign-in failed" in r.getMessage()
+        )
+        # Both halves: the class alone can't tell a timeout from a 503.
+        assert "ConnectTimeout" in line
+        assert "api.github.com" in line
+
+    async def test_the_oauth_code_never_reaches_the_log(self, caplog, monkeypatch):
+        import httpx
+
+        class _Failing:
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *a):
+                return False
+
+            async def post(self, *a, **kw):
+                raise httpx.ReadTimeout("read timeout")
+
+        monkeypatch.setattr(httpx, "AsyncClient", lambda **kw: _Failing())
+        handler = self._callback(monkeypatch)
+        with caplog.at_level(logging.DEBUG):
+            await handler(self._request())
+        assert "abc" not in " ".join(r.getMessage() for r in caplog.records)
