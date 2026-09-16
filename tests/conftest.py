@@ -57,3 +57,54 @@ def service() -> MemoryService:
     blob store injected so the media tools are exercisable."""
     ctx = replace(build_context(), blob_store=FakeBlobStore())
     return MemoryService(ctx)
+
+
+@pytest.fixture
+def restore_loggers():
+    """Undo what `configure_logging` does to global logger state.
+
+    **Any test class that calls `configure_logging` must request this**, via
+    `@pytest.mark.usefixtures("restore_loggers")` on the class. It is opt-in
+    rather than autouse because most tests never touch logger configuration,
+    but a class that does and forgets the mark leaks `basicConfig(force=True)`'s
+    replacement root handler into every later test — which surfaces as an
+    order-dependent failure somewhere else entirely.
+
+    Shared rather than copied into each class: the two copies it replaces were
+    byte-identical, which is exactly the drift this guards against.
+    """
+    import logging
+
+    from polymnemo import logging as log_mod
+
+    names = ("", "polymnemo", log_mod.CALL_LOGGER, log_mod.AUTH_LOGGER)
+    # Handlers as well as levels, and for the named loggers too: restoring a
+    # level while leaving an added handler in place still leaks.
+    saved = [
+        (
+            logging.getLogger(n),
+            logging.getLogger(n).level,
+            list(logging.getLogger(n).handlers),
+        )
+        for n in names
+    ]
+    yield
+    for log, level, handlers in saved:
+        log.setLevel(level)
+        log.handlers = handlers
+
+
+@pytest.fixture(autouse=True)
+def _isolate_request_scope():
+    """Reset the per-request scope around every test.
+
+    `new_request_scope()` binds a ContextVar in the ambient context, and pytest
+    does not isolate contextvars across sync tests — so one test's identity
+    leaked into the next, and the suite passed only because of the order the
+    tests happened to run in.
+    """
+    from polymnemo import tooling
+
+    token = tooling._REQUEST.set(None)
+    yield
+    tooling._REQUEST.reset(token)

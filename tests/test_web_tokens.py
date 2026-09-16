@@ -9,8 +9,10 @@ attacker's account.
 from __future__ import annotations
 
 import json
+import logging
 import time
 from datetime import UTC, datetime, timedelta
+from types import SimpleNamespace
 
 import pytest
 
@@ -251,3 +253,103 @@ class TestRevokeFeedback:
         handler = self._handler(monkeypatch, self._Store(True))
         response = await handler(self._request())
         assert response.status_code == 302
+
+
+# A sentinel long enough that no third-party DEBUG line can contain it by
+# accident — "abc" collided with hex offsets and base64 fragments.
+OAUTH_CODE_SENTINEL = "OAUTHCODE-b3f1c2a4-SENTINEL"
+
+
+def _failing_client(exc: Exception):
+    """An httpx.AsyncClient stub whose every request raises `exc`.
+
+    Stubs `get` as well as `post`: if the callback ever prefetches user info
+    before the token exchange, a post-only stub would fail with AttributeError
+    instead of exercising the path under test.
+    """
+
+    class _Failing:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *a):
+            return False
+
+        async def post(self, *a, **kw):
+            raise exc
+
+        async def get(self, *a, **kw):
+            raise exc
+
+    return lambda **kw: _Failing()
+
+
+class TestSignInFailureIsDiagnosable:
+    """Drives `tokens_callback` with a client that fails, because asserting on
+    web.py's source only proved the literal appears somewhere in the file —
+    even in unreachable code — and the deleted alternative asserted nothing
+    but that httpx renders its own constructor argument."""
+
+    class _Request:
+        def __init__(self, state: str, cookie: str) -> None:
+            self.cookies = {web.STATE_COOKIE: cookie}
+            self.headers = {"host": "e.test"}
+            self.url = SimpleNamespace(scheme="https")
+            # Present even though `_base_url` short-circuits on the configured
+            # oauth_base_url today: without it the fake only works by accident
+            # of that patch, and drops to AttributeError the moment it changes.
+            self.base_url = "https://e.test/"
+            self.query_params = {"code": OAUTH_CODE_SENTINEL, "state": state}
+
+    def _callback(self, monkeypatch):
+        monkeypatch.setattr(web.settings, "oauth_client_id", "id")
+        monkeypatch.setattr(web.settings, "oauth_base_url", "https://e.test")
+        recorder = _RouteRecorder()
+        web.register(recorder, None)
+        return recorder.handlers["/tokens/callback"]
+
+    def _request(self):
+        state = "s3cr3t-state"
+        return self._Request(state, web._sign(state))
+
+    def _logged(self, caplog, needle: str) -> str | None:
+        """None rather than StopIteration: a renamed message should fail the
+        assertion, not error the test."""
+        return next(
+            (r.getMessage() for r in caplog.records if needle in r.getMessage()), None
+        )
+
+    async def test_the_exception_message_reaches_the_log(self, caplog, monkeypatch):
+        import httpx
+
+        monkeypatch.setattr(
+            httpx,
+            "AsyncClient",
+            _failing_client(httpx.ConnectTimeout("timed out reaching api.github.com")),
+        )
+        handler = self._callback(monkeypatch)
+        with caplog.at_level(logging.WARNING):
+            response = await handler(self._request())
+        assert response.status_code == 400
+        line = self._logged(caplog, "sign-in failed")
+        assert line is not None, "expected a sign-in-failed log record"
+        # Both halves: the class alone can't tell a timeout from a 503.
+        assert "ConnectTimeout" in line
+        assert "api.github.com" in line
+
+    async def test_the_oauth_code_never_reaches_the_log(self, caplog, monkeypatch):
+        import httpx
+
+        monkeypatch.setattr(
+            httpx, "AsyncClient", _failing_client(httpx.ReadTimeout("read timeout"))
+        )
+        handler = self._callback(monkeypatch)
+        with caplog.at_level(logging.DEBUG):
+            response = await handler(self._request())
+        # Positive anchor: without it, an early return before the httpx call
+        # leaves caplog empty and the negative assertion passes vacuously.
+        assert response.status_code == 400
+        assert self._logged(caplog, "sign-in failed") is not None
+        assert OAUTH_CODE_SENTINEL not in " ".join(
+            r.getMessage() for r in caplog.records
+        )

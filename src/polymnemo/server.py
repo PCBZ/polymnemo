@@ -16,8 +16,17 @@ from functools import lru_cache
 from fastmcp import FastMCP
 
 from . import __version__, app, web
+from .auth import BearerKeyAuth
 from .config import settings
-from .tooling import current_user, rate_limited, tool_errors
+from .logging import CALL_LOGGER, CallLogMiddleware, configure_logging
+from .store import InMemoryStore
+from .tooling import (
+    current_user,
+    current_user_id,
+    new_request_scope,
+    rate_limited,
+    tool_errors,
+)
 
 logger = logging.getLogger("polymnemo")
 
@@ -288,23 +297,56 @@ def namespace_collection(namespace: str) -> dict:
     return app.service.list_memories(current_user(), namespace=namespace)
 
 
+def _log_degradations() -> None:
+    """Warn about a context that started in a reduced mode.
+
+    Derived here, from the built context, rather than logged at the decision
+    point in ``context``: ``app.ctx`` is built at import, before ``main`` can
+    configure logging, so anything logged there comes out unformatted and in
+    text even under ``log_format=json``. Re-deriving is the cheaper fix; making
+    the context lazy would touch every ``app.ctx`` reference.
+    """
+    if isinstance(app.ctx.store, InMemoryStore):
+        logger.warning(
+            "Running on InMemoryStore (no POLYMNEMO_DATABASE_URL): not durable, "
+            "not shared across instances."
+        )
+    if isinstance(app.ctx.auth, BearerKeyAuth) and not settings.parse_api_keys():
+        logger.warning(
+            "auth_backend=bearer but no POLYMNEMO_API_KEYS set; all requests "
+            "will be rejected."
+        )
+
+
 def main() -> None:
     """Console-script entry point: run the server over Streamable HTTP."""
-    # Root stays at INFO so third-party libs (SQLAlchemy, uvicorn, …) don't flood
-    # when we turn our own logging up; POLYMNEMO_LOG_LEVEL only moves the
-    # `polymnemo` logger (e.g. DEBUG to land the #96 read-payload observe lines).
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+    structured = settings.log_format.lower() == "json"
+    configure_logging(structured=structured, level=settings.log_level)
+    # Registered here, not at import, so tests importing `mcp` don't get it.
+    mcp.add_middleware(
+        CallLogMiddleware(
+            logger=logging.getLogger(CALL_LOGGER),
+            structured=structured,
+            # Injected, so the logging layer has no dependency on auth.
+            user_id=current_user_id,
+            new_scope=new_request_scope,
+        )
     )
-    logging.getLogger("polymnemo").setLevel(
-        getattr(logging, settings.log_level.upper(), logging.INFO)
-    )
+    _log_degradations()
+    # What this replica is. `ping` says the same but needs auth to ask.
     logger.info(
-        "Starting polymnemo MCP server at http://%s:%s%s",
+        "Starting polymnemo %s at http://%s:%s%s — store=%s embedder=%s auth=%s "
+        "blob=%s ratelimit=%s oauth=%s",
+        __version__,
         settings.host,
         settings.port,
         settings.mcp_path,
+        type(app.ctx.store).__name__,
+        type(app.ctx.embedder).__name__,
+        type(app.ctx.auth).__name__,
+        type(app.ctx.blob_store).__name__ if app.ctx.blob_store else "none",
+        type(app.ctx.rate_limiter).__name__ if app.ctx.rate_limiter else "none",
+        settings.oauth_enabled,
     )
     mcp.run(
         transport="http",

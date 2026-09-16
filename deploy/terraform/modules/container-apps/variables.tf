@@ -57,6 +57,12 @@ variable "oauth_allowed_redirect_uris" {
   description = "Comma-separated extra client redirect-URI patterns. Added to the localhost-only default, never replacing it."
 }
 
+variable "log_format" {
+  type        = string
+  default     = "json"
+  description = "Injected as POLYMNEMO_LOG_FORMAT. Defaults to json here, not to the app's own \"text\" default: the per-call log (#93) is only queryable in Log Analytics as JSON, and leaving it unset shipped the feature switched off."
+}
+
 variable "log_level" {
   type        = string
   default     = "INFO"

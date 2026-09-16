@@ -165,8 +165,11 @@ class MemoryService:
             try:
                 self.ctx.blob_store.delete(memory.object_key)
             except BlobError:
-                logger.warning(
-                    "blob delete failed for %s; object leaked", memory.object_key
+                # ERROR: the row is gone, so nothing will ever clean these up.
+                logger.error(
+                    "blob delete failed for %s (memory %s); object leaked",
+                    memory.object_key,
+                    memory_id,
                 )
         return {"id": memory_id, "deleted": deleted}
 
