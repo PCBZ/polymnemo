@@ -92,3 +92,19 @@ def restore_loggers():
     for log, level, handlers in saved:
         log.setLevel(level)
         log.handlers = handlers
+
+
+@pytest.fixture(autouse=True)
+def _isolate_request_scope():
+    """Reset the per-request scope around every test.
+
+    `new_request_scope()` binds a ContextVar in the ambient context, and pytest
+    does not isolate contextvars across sync tests — so one test's identity
+    leaked into the next, and the suite passed only because of the order the
+    tests happened to run in.
+    """
+    from polymnemo import tooling
+
+    token = tooling._REQUEST.set(None)
+    yield
+    tooling._REQUEST.reset(token)

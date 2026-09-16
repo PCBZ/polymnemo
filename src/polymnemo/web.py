@@ -43,8 +43,11 @@ from starlette.responses import (
 from .auth.oauth import GITHUB_SUBJECT_PREFIX
 from .auth.tokens import ApiToken, ApiTokenStore
 from .config import settings
+from .logging import AUDIT_LOGGER
 
 logger = logging.getLogger("polymnemo")
+# Credential lifecycle: pinned so `log_level` cannot raise it out of view.
+audit = logging.getLogger(AUDIT_LOGGER)
 
 SESSION_COOKIE = "polymnemo_session"
 SESSION_MAX_AGE = 8 * 3600
@@ -328,7 +331,7 @@ def register(mcp, store: ApiTokenStore | None) -> None:
         if sub is None:
             return _fail_signin("Sign-in failed.")
 
-        logger.info("token page: signed in as %s%s", GITHUB_SUBJECT_PREFIX, sub)
+        audit.info("token page: signed in as %s%s", GITHUB_SUBJECT_PREFIX, sub)
         # Same user_id TokenSubjectAuth resolves for this account.
         response = RedirectResponse(f"{base}/tokens", status_code=302)
         _set_cookie(
@@ -349,7 +352,10 @@ def register(mcp, store: ApiTokenStore | None) -> None:
             return _fail(f"Request rejected. Start again at {base}/tokens")
         if store is None:
             return _fail("API tokens need a database; this server has none.")
-        label = str(form.get("label") or "").strip()[:60]
+        # Collapse newlines: `.strip()` only trims the ends, and an interior
+        # one lets a label forge a second log line that parses as a call
+        # record. The JSON formatter escapes it too; this is the source fix.
+        label = " ".join(str(form.get("label") or "").split())[:60]
         if not label:
             return RedirectResponse(f"{base}/tokens", status_code=302)
         try:
@@ -362,8 +368,8 @@ def register(mcp, store: ApiTokenStore | None) -> None:
         days = max(1, min(days, 365))
         token, meta = await asyncio.to_thread(store.create, user_id, label, days)
         # Audit: a credential's provenance can't be reconstructed later.
-        logger.info(
-            "api token created: user=%s id=%s label=%s expires=%s",
+        audit.info(
+            "api token created: user=%s id=%s label=%r expires=%s",
             user_id,
             meta.id,
             meta.label,
@@ -384,7 +390,7 @@ def register(mcp, store: ApiTokenStore | None) -> None:
         if store is not None:
             token_id = str(form.get("id") or "")
             revoked = await asyncio.to_thread(store.revoke, user_id, token_id)
-            logger.info(
+            audit.info(
                 "api token revoke: user=%s id=%s found=%s", user_id, token_id, revoked
             )
             if not revoked:

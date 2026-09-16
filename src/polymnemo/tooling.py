@@ -36,10 +36,14 @@ def _scope() -> dict[str, str]:
     """This request's scope, creating one if the caller never opened it.
 
     ``_REQUEST.get({})`` would hand back a throwaway dict, so writing to it is a
-    no-op and the identity vanishes with no error — which is what happens to any
-    path that reaches ``current_user`` without the middleware, such as a test or
-    a background task. Binding it here makes the write land instead. The binding
-    is task-local, so this cannot leak one request's identity into another.
+    no-op and the identity vanishes with no error. Binding one here makes the
+    write land for readers in the *same* context.
+
+    It does not rescue a caller that reaches ``current_user`` without the
+    middleware from a worker thread or a child task: the binding is a rebind,
+    and anyio/asyncio copy the context, so only mutation of an already-bound
+    dict propagates back. Production is unaffected — the middleware opens the
+    scope on the event loop, so the dict exists before any tool runs.
     """
     scope = _REQUEST.get(None)
     if scope is None:

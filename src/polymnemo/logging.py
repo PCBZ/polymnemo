@@ -14,9 +14,10 @@ composition root, the way every other layer in this project is wired.
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from typing import Any
 
 from fastmcp.server.middleware.logging import StructuredLoggingMiddleware
@@ -30,6 +31,10 @@ CALL_LOGGER = "polymnemo.calls"
 # one. Auth modules reach it via `getLogger(__name__)`, inheriting this level.
 AUTH_LOGGER = "polymnemo.auth"
 
+# Credential lifecycle. Like the auth log, it answers a question that cannot be
+# reconstructed later, so `log_level` must not be able to raise it out of view.
+AUDIT_LOGGER = "polymnemo.audit"
+
 # A call that never returns emits no completion line, so it needs its own.
 SLOW_CALL_SECONDS = 10.0
 
@@ -39,6 +44,57 @@ TEXT_FORMAT = "%(asctime)s %(levelname)s %(name)s: %(message)s"
 SCOPE_PAIR_ERROR = "pass both user_id and new_scope, or neither"
 
 
+class JsonFormatter(logging.Formatter):
+    """One JSON object per record, for every logger — not just the call log.
+
+    Emitting `%(message)s` alone was cheaper but lost the level, timestamp and
+    logger name from every prose line, so a 401 burst, a rate-limit hit and a
+    leaked blob were indistinguishable by severity in the very mode they were
+    written for. It also let a newline inside a logged value forge a second
+    line; `json.dumps` escapes it.
+    """
+
+    def format(self, record: logging.LogRecord) -> str:
+        payload: dict[str, object] = {
+            "ts": self.formatTime(record, "%Y-%m-%dT%H:%M:%S%z"),
+            "level": record.levelname,
+            "logger": record.name,
+        }
+        # The call log hands over its fields; everything else is a sentence.
+        fields = getattr(record, "fields", None)
+        if isinstance(fields, dict):
+            payload.update(fields)
+        else:
+            payload["message"] = record.getMessage()
+        if record.exc_info:
+            payload["exc_type"] = (
+                record.exc_info[0].__name__ if record.exc_info[0] else None
+            )
+        return json.dumps(payload, default=str)
+
+
+def _install_levels(resolved: int) -> None:
+    """Which streams `log_level` may silence, and which it may not.
+
+    A table rather than a run of setLevel statements: the difference between
+    "pinned", "capped" and "follows the setting" lived only in comments, and
+    every new stream that must survive LOG_LEVEL=ERROR added another line.
+    """
+    policy: dict[str, int] = {
+        # Access log: always on, because upstream splits ERROR/INFO and losing
+        # the successes makes every error-rate query read 100%.
+        CALL_LOGGER: logging.INFO,
+        # A 401 is the only record of a credential-stuffing run.
+        AUTH_LOGGER: min(resolved, logging.WARNING),
+        # Who minted or revoked a credential, and when.
+        AUDIT_LOGGER: min(resolved, logging.INFO),
+        # Our own warnings are actionable; INFO/DEBUG chatter follows `level`.
+        "polymnemo": min(resolved, logging.WARNING),
+    }
+    for name, value in policy.items():
+        logging.getLogger(name).setLevel(value)
+
+
 def configure_logging(*, structured: bool, level: str) -> None:
     """Install the root handler. Called from the entry point, never on import."""
     resolved = getattr(logging, level.upper(), logging.INFO)
@@ -46,27 +102,35 @@ def configure_logging(*, structured: bool, level: str) -> None:
     if not isinstance(resolved, int):
         resolved = logging.INFO
     logging.basicConfig(
-        # In json mode the record IS the object, so nothing may precede it.
-        format="%(message)s" if structured else TEXT_FORMAT,
-        # Stricter of the two: raising `level` quietens libraries too.
-        level=max(logging.INFO, resolved),
+        format=TEXT_FORMAT,
+        # Capped at WARNING: raising `level` quietens libraries, but never past
+        # their warnings — SQLAlchemy pool exhaustion is exactly what you want
+        # to still see on a replica someone set to ERROR.
+        level=min(max(logging.INFO, resolved), logging.WARNING),
         # Without this the format is ignored: root already has a handler.
         # Note it closes every existing one — attach an SDK's handler after
         # this runs, or to a named logger, or it goes dark silently.
         force=True,
     )
-    logging.getLogger("polymnemo").setLevel(resolved)
-    # Its own level: upstream splits ERROR/INFO, so WARNING would drop the
-    # successes and every error-rate query would read 100%.
-    logging.getLogger(CALL_LOGGER).setLevel(logging.INFO)
-    # Never above WARNING, or LOG_LEVEL=ERROR silences every 401.
-    logging.getLogger(AUTH_LOGGER).setLevel(min(resolved, logging.WARNING))
+    if structured:
+        for handler in logging.getLogger().handlers:
+            handler.setFormatter(JsonFormatter())
+    _install_levels(resolved)
 
 
 def _target(context: MiddlewareContext[Any]) -> str | None:
     """The tool's name, or the resource's URI. Upstream only logs ``method``,
     which is always ``tools/call`` and so answers nothing per-tool."""
     message = getattr(context, "message", None)
+    # A Mapping, not a model, on the root dispatch: FastMCP hands `on_message`
+    # the raw params for anything the interior never dispatched (a malformed
+    # or unroutable tools/call), and getattr misses `name` sitting in the dict.
+    if isinstance(message, Mapping):
+        for key in ("name", "uri"):
+            value = message.get(key)
+            if value is not None:
+                return str(value)
+        return None
     # `is not None`: an empty name is an anomaly to report, not to drop.
     name = getattr(message, "name", None)  # tools/call, prompts/get
     if name is not None:
@@ -108,8 +172,11 @@ class CallLogMiddleware(StructuredLoggingMiddleware):
             raise ValueError(SCOPE_PAIR_ERROR)
         super().__init__(**kwargs)
         self.structured_logging = structured
-        self._user_id = user_id or (lambda: None)
-        self._new_scope = new_scope or (lambda: None)
+        # `is None`, matching the guard above: `or` would swap out a callable
+        # that is merely falsy, producing the silent no-user_id case the guard
+        # exists to reject.
+        self._user_id = (lambda: None) if user_id is None else user_id
+        self._new_scope = (lambda: None) if new_scope is None else new_scope
 
     async def on_message(self, context: MiddlewareContext[Any], call_next: Any) -> Any:
         # Fresh scope per call, so one request can never read another's identity.
@@ -118,6 +185,29 @@ class CallLogMiddleware(StructuredLoggingMiddleware):
         watchdog = asyncio.create_task(self._note_if_still_running(context, started))
         try:
             return await super().on_message(context, call_next)
+        except BaseException as exc:
+            # CancelledError is a BaseException, so upstream's `except
+            # Exception` never sees it: a client disconnect or a shutdown left
+            # the call with no completion line and no in-flight line either —
+            # completely invisible, which is the blind spot the watchdog exists
+            # to close. Only cancellation reaches here; Exception is already
+            # logged and re-raised upstream.
+            if isinstance(exc, asyncio.CancelledError):
+                self._log_message(
+                    self._annotate(
+                        {
+                            "event": f"{context.type}_cancelled",
+                            "method": context.method or "unknown",
+                            "source": context.source,
+                            "duration_ms": round(
+                                (time.perf_counter() - started) * 1000, 2
+                            ),
+                        },
+                        context,
+                    ),
+                    logging.WARNING,
+                )
+            raise
         finally:
             # cancel() without awaiting: the task is reaped on the next tick,
             # and awaiting it here measured 13.5 -> 47.9 µs per call.
@@ -153,6 +243,16 @@ class CallLogMiddleware(StructuredLoggingMiddleware):
         # Drop the `*_start` half: one line per call, not two.
         if str(message.get("event", "")).endswith("_start"):
             return
+        if self.structured_logging:
+            # Hand the fields over rather than pre-serialising, so JsonFormatter
+            # can put `ts`/`level`/`logger` alongside them instead of nesting a
+            # JSON string inside a JSON string.
+            self.logger.log(
+                log_level or self.log_level,
+                str(message.get("event", "")),
+                extra={"fields": message},
+            )
+            return
         super()._log_message(message, log_level)
 
     def _create_after_message(
@@ -165,8 +265,14 @@ class CallLogMiddleware(StructuredLoggingMiddleware):
         self, context: MiddlewareContext[Any], start_time: float, error: Exception
     ) -> dict[str, str | int | float]:
         message = super()._create_error_message(context, start_time, error)
-        # The class, never the message: it can carry caller data.
+        # The class, never the message: it can carry caller data. The cause
+        # too, because `tool_errors`, `rate_limited` and `current_user` all
+        # normalise to ToolError — without it every in-tool failure reads the
+        # same and an error-rate spike can't be diagnosed.
         message["error"] = type(error).__name__
+        cause = error.__cause__
+        if cause is not None:
+            message["cause"] = type(cause).__name__
         return self._annotate(message, context)
 
     def _annotate(
@@ -182,7 +288,14 @@ class CallLogMiddleware(StructuredLoggingMiddleware):
         target = _target(context)
         if target is not None:
             message["target"] = target
-        user_id = self._user_id()
+        try:
+            user_id = self._user_id()
+        except Exception:
+            # An injected resolver that raises would otherwise be caught by
+            # upstream's `except Exception`, called a second time from the
+            # error path, and escape — turning a successful call into a
+            # failure. Logging must not break the thing it logs.
+            user_id = None
         if user_id is not None:
             message["user_id"] = user_id
         return message

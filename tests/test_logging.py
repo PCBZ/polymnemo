@@ -40,8 +40,21 @@ def _boom(exc: Exception):
     return call_next
 
 
+_JSON = log_mod.JsonFormatter()
+
+
 def _lines(caplog) -> list[str]:
-    return [r.message for r in caplog.records if r.name == log_mod.CALL_LOGGER]
+    """The call-log records as they are actually emitted.
+
+    The structured path hands its fields to the formatter via `extra`, so the
+    message attribute alone is just the event name — those are rendered through
+    JsonFormatter. The text path already stringified itself into the message.
+    """
+    return [
+        _JSON.format(r) if hasattr(r, "fields") else r.getMessage()
+        for r in caplog.records
+        if r.name == log_mod.CALL_LOGGER
+    ]
 
 
 def _middleware(user_id=None, new_scope=None, **kw):
@@ -524,12 +537,37 @@ class TestReviewFixes:
         log_mod.configure_logging(structured=False, level="BASIC_FORMAT")
         assert logging.getLogger("polymnemo").level == logging.INFO
 
+    def test_a_rejection_is_emitted_on_a_pinned_logger(self, caplog):
+        """Asserts the logger of the record actually emitted, not the one the
+        test looks up: routing `_rejected` to an unpinned logger left the
+        lookup-based versions of this green while reintroducing the blindness."""
+        from polymnemo.auth import AuthError
+        from polymnemo.auth.bearer import BearerKeyAuth
+
+        log_mod.configure_logging(structured=False, level="ERROR")
+        # basicConfig(force=True) closes and drops every root handler —
+        # including pytest's capture handler — so anything logged after it is
+        # invisible to caplog unless the handler is put back.
+        logging.getLogger().addHandler(caplog.handler)
+        with caplog.at_level(logging.WARNING), pytest.raises(AuthError):
+            BearerKeyAuth({}).authenticate({"authorization": "Bearer x"})
+        emitted = [r for r in caplog.records if "auth rejected" in r.getMessage()]
+        assert emitted, "no rejection was logged at LOG_LEVEL=ERROR"
+        for record in emitted:
+            assert record.name.startswith(log_mod.AUTH_LOGGER), (
+                f"{record.name} is not under the pinned {log_mod.AUTH_LOGGER}"
+            )
+
     def test_auth_rejections_survive_log_level_error(self):
         """A 401 never reaches the middleware, so this logger is its only
         record — LOG_LEVEL=ERROR must not be able to hide a stuffing run."""
         log_mod.configure_logging(structured=False, level="ERROR")
-        assert logging.getLogger("polymnemo").level == logging.ERROR
         assert logging.getLogger(log_mod.AUTH_LOGGER).isEnabledFor(logging.WARNING)
+        # `polymnemo` is capped at WARNING too: our own warnings are actionable,
+        # so LOG_LEVEL must not be able to hide "running on InMemoryStore"
+        # either. Only INFO/DEBUG chatter follows the setting.
+        assert logging.getLogger("polymnemo").isEnabledFor(logging.WARNING)
+        assert not logging.getLogger("polymnemo").isEnabledFor(logging.INFO)
 
     def test_lowering_the_level_still_reaches_the_auth_logger(self):
         log_mod.configure_logging(structured=False, level="DEBUG")
@@ -789,3 +827,126 @@ class TestSlowCallLogsTwiceOnPurpose:
             await _middleware().on_message(_context(), _ok)
             await asyncio.sleep(0)
         assert len(_lines(caplog)) == 1
+
+
+@pytest.mark.usefixtures("restore_loggers")
+class TestHighPriorityFixes:
+    """The findings from the max-effort review, each at the seam it broke."""
+
+    async def test_a_cancelled_call_is_not_invisible(self, caplog):
+        """CancelledError is a BaseException, so upstream's `except Exception`
+        never saw it: a client disconnect produced no completion line, and the
+        watchdog's line was cancelled too."""
+        import asyncio
+
+        async def hangs(context):
+            await asyncio.sleep(30)
+
+        mw = _middleware()
+        with caplog.at_level(logging.WARNING):
+            task = asyncio.create_task(mw.on_message(_context(), hangs))
+            await asyncio.sleep(0.05)
+            task.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await task
+        entry = json.loads(_lines(caplog)[0])
+        assert entry["event"].endswith("_cancelled")
+        assert entry["target"] == "remember"
+        assert entry["duration_ms"] > 0
+
+    async def test_a_dict_message_still_yields_a_target(self, caplog):
+        """FastMCP's root dispatch hands on_message the raw params mapping, not
+        a typed model, for anything the interior never dispatched — getattr
+        missed the name sitting in the dict."""
+        context = SimpleNamespace(
+            type="request",
+            method="tools/call",
+            source="client",
+            message={"name": "forget", "arguments": {"memory_id": "x"}},
+        )
+        with caplog.at_level(logging.INFO):
+            await _middleware().on_message(context, _ok)
+        assert json.loads(_lines(caplog)[0])["target"] == "forget"
+
+    async def test_a_raising_resolver_does_not_fail_the_call(self, caplog):
+        """It was called on both the success and error paths, so a raise was
+        caught by upstream, re-raised from the error path, and escaped —
+        discarding the tool's result."""
+
+        def boom():
+            raise RuntimeError("resolver blew up")
+
+        mw = _middleware(user_id=boom)
+        with caplog.at_level(logging.INFO):
+            result = await mw.on_message(_context(), _ok)
+        assert result == "result"
+        assert "user_id" not in json.loads(_lines(caplog)[0])
+
+    async def test_the_cause_survives_the_ToolError_wrapper(self, caplog):
+        """tool_errors, rate_limited and current_user all normalise to
+        ToolError, so without the cause every in-tool failure reads the same."""
+        from fastmcp.exceptions import ToolError
+
+        def raise_wrapped(context):
+            raise ToolError("nope") from ValueError("the real problem")
+
+        async def call_next(context):
+            raise_wrapped(context)
+
+        with caplog.at_level(logging.INFO), pytest.raises(ToolError):
+            await _middleware().on_message(_context(), call_next)
+        entry = json.loads(_lines(caplog)[0])
+        assert entry["error"] == "ToolError"
+        assert entry["cause"] == "ValueError"
+
+    def test_json_lines_carry_level_and_logger(self):
+        """`%(message)s` alone stripped level, timestamp and logger name from
+        every prose line — in the mode they were written for."""
+        record = logging.LogRecord(
+            "polymnemo.auth.bearer",
+            logging.WARNING,
+            "",
+            0,
+            "bearer auth rejected: %s",
+            ("unknown_key",),
+            None,
+        )
+        entry = json.loads(log_mod.JsonFormatter().format(record))
+        assert entry["level"] == "WARNING"
+        assert entry["logger"] == "polymnemo.auth.bearer"
+        assert entry["message"] == "bearer auth rejected: unknown_key"
+        assert "ts" in entry
+
+    def test_a_newline_in_a_logged_value_cannot_forge_a_line(self):
+        """The formatter escapes it; web.py collapses it at the source too."""
+        record = logging.LogRecord(
+            "polymnemo.audit",
+            logging.INFO,
+            "",
+            0,
+            "api token created: label=%r",
+            ('x\n{"event":"request_success"}',),
+            None,
+        )
+        line = log_mod.JsonFormatter().format(record)
+        assert len(line.splitlines()) == 1
+        json.loads(line)  # still one parseable object
+
+    def test_audit_and_our_warnings_survive_log_level_error(self):
+        """Both were on the unpinned `polymnemo` logger, so LOG_LEVEL=ERROR
+        hid the credential trail and 'running on InMemoryStore' alike."""
+        log_mod.configure_logging(structured=False, level="ERROR")
+        assert logging.getLogger(log_mod.AUDIT_LOGGER).isEnabledFor(logging.INFO)
+        assert logging.getLogger("polymnemo").isEnabledFor(logging.WARNING)
+
+    def test_library_warnings_survive_log_level_error(self):
+        """Root is capped at WARNING: raising the level quietens libraries, but
+        never past their warnings — SQLAlchemy pool exhaustion is exactly what
+        you still want on a replica someone set to ERROR."""
+        log_mod.configure_logging(structured=False, level="ERROR")
+        # Asserted on root's level rather than a library logger's
+        # isEnabledFor: pytest's logging plugin manipulates the latter, which
+        # made this pass against an uncapped root.
+        assert logging.getLogger().level == logging.WARNING, (
+            "root must stay at WARNING so library warnings survive LOG_LEVEL=ERROR"
+        )
