@@ -63,20 +63,32 @@ def service() -> MemoryService:
 def restore_loggers():
     """Undo what `configure_logging` does to global logger state.
 
-    Shared rather than copied into each test class: the two copies it replaces
-    were byte-identical, which is exactly the drift this guards against.
+    **Any test class that calls `configure_logging` must request this**, via
+    `@pytest.mark.usefixtures("restore_loggers")` on the class. It is opt-in
+    rather than autouse because most tests never touch logger configuration,
+    but a class that does and forgets the mark leaks `basicConfig(force=True)`'s
+    replacement root handler into every later test — which surfaces as an
+    order-dependent failure somewhere else entirely.
+
+    Shared rather than copied into each class: the two copies it replaces were
+    byte-identical, which is exactly the drift this guards against.
     """
     import logging
 
     from polymnemo import logging as log_mod
 
     names = ("", "polymnemo", log_mod.CALL_LOGGER, log_mod.AUTH_LOGGER)
-    saved = [(logging.getLogger(n), logging.getLogger(n).level) for n in names]
-    root = logging.getLogger()
-    handlers = list(root.handlers)
+    # Handlers as well as levels, and for the named loggers too: restoring a
+    # level while leaving an added handler in place still leaks.
+    saved = [
+        (
+            logging.getLogger(n),
+            logging.getLogger(n).level,
+            list(logging.getLogger(n).handlers),
+        )
+        for n in names
+    ]
     yield
-    for log, level in saved:
+    for log, level, handlers in saved:
         log.setLevel(level)
-    # basicConfig(force=True) swaps root's handler for a fresh one; restoring
-    # levels alone leaks it into every later test.
-    root.handlers = handlers
+        log.handlers = handlers

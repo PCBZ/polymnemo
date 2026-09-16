@@ -661,7 +661,14 @@ class TestSecondReviewFixes:
         already passed."""
         message = log_mod.SCOPE_PAIR_ERROR
         assert "user_id" in message and "new_scope" in message
-        assert "requires" not in message, "one-directional phrasing is misleading"
+        # Positive, not just a "requires" blocklist: "needs" / "missing" /
+        # "without" express the same one-directional instruction and would
+        # have passed. Naming both outcomes is what makes it symmetric.
+        assert "both" in message and "neither" in message
+        for one_directional in ("requires", "needs", "missing", "without"):
+            assert one_directional not in message, (
+                f"{one_directional!r} tells the caller to add what they passed"
+            )
 
     def test_neither_is_still_allowed(self):
         CallLogMiddleware(logger=logging.getLogger(log_mod.CALL_LOGGER))
