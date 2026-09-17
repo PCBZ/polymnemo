@@ -26,9 +26,15 @@ import time
 import httpx
 import pytest
 
-# Log Analytics is not immediate. Overridable because CI and a local run want
-# different patience: a deploy check can afford minutes, a developer cannot.
-INGESTION_TIMEOUT_SECONDS = int(os.environ.get("POLYMNEMO_SMOKE_LOG_TIMEOUT", "300"))
+# Log Analytics is not immediate. Measured over 33,590 lines across 7 days of
+# this workspace (`ingestion_time() - TimeGenerated`): p50 4s, p95 10s, p99 28s,
+# max 359s. So the common case is seconds, but the tail runs to ~6 minutes — and
+# a timeout under that turns a slow ingest into a red deploy. 600 clears the
+# observed max with room; it is only ever spent when something is actually
+# wrong, since a healthy run returns on the first poll.
+#
+# Overridable because CI and a local run want different patience.
+INGESTION_TIMEOUT_SECONDS = int(os.environ.get("POLYMNEMO_SMOKE_LOG_TIMEOUT", "600"))
 POLL_SECONDS = 15
 
 CALL_LOGGER = "polymnemo.calls"

@@ -221,9 +221,7 @@ jobs:
         run: |
           terraform init $TF_BACKEND -backend-config=key=azure-test.tfstate
           terraform apply -auto-approve
-          url="$(terraform output -raw service_url)"
-          echo "Test MCP endpoint: ${url}/mcp"
-          ../../../scripts/wait-for-app.sh "$url"
+          echo "Test MCP endpoint: $(terraform output -raw service_url)/mcp"
 
   # THE GATE. Prod waits on this.
   smoke-test:
@@ -255,11 +253,7 @@ jobs:
         run: |
           terraform init $TF_BACKEND -backend-config=key=azure.tfstate
           terraform apply -auto-approve
-          url="$(terraform output -raw service_url)"
-          echo "MCP endpoint: ${url}/mcp"
-          # The app pulls a PUBLIC image with no credentials, so a private/
-          # misconfigured package would be a green-but-broken apply.
-          ../../../scripts/wait-for-app.sh "$url"
+          echo "MCP endpoint: $(terraform output -raw service_url)/mcp"
 
   # Read-only, and after the fact: the gate already passed on the same image, so
   # this is confirmation that prod's own configuration matches.
