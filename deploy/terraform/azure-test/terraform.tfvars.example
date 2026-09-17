@@ -1,0 +1,25 @@
+# Copy to terraform.tfvars and fill in. terraform.tfvars and state hold secrets —
+# both are gitignored.
+#
+# This is the TEST deployment: same structure as azure/, isolated data. Apply
+# these roots FIRST, because this one reads all three states:
+#   azure/    — the Container App Environment this app attaches to
+#   test/     — the Neon branch it uses instead of the prod database
+#   r2-test/  — its own media bucket
+#
+# (The deploy workflow orders this for you; `azure-test` needs build, test and
+# r2-test, and gates the prod apply on the smoke run against it.)
+
+azure_subscription_id = "00000000-0000-0000-0000-000000000000"
+location              = "westus2"
+image                 = "ghcr.io/pcbz/polymnemo:v1.0.0"
+
+# Deliberately NOT the prod keys: a prod key must not open test, or the reverse.
+api_keys = "sk-test-secret:smoke"
+
+# Same resource group and environment as prod on purpose — the subscription
+# allows one managed environment per region, so the test app attaches to prod's
+# rather than creating a second. Neither holds application data, and the log
+# query scopes by container app name.
+# resource_group_name = "polymnemo-rg"
+# service_name        = "polymnemo-test"

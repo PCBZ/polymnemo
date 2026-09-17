@@ -7,34 +7,107 @@
 # keys arrive as inputs (the shared Neon URL comes from the neon root) and are
 # injected as app secrets.
 
+# --- Platform: created once, then shared -------------------------------------
+# The subscription allows ONE managed environment per region (measured: westus2
+# reports "Managed Environment Count 1/1"), so a second app in the same region
+# cannot bring its own. Naming an existing environment attaches to it; leaving
+# it empty creates the whole platform, which is what the prod root does. Cores
+# are the quota that actually matters for a second app, and those are 1/100.
+#
+# Attaching keys off NAMES and resolves everything else through data sources —
+# never an id threaded in from another root's outputs. Those outputs only exist
+# once that root has applied, which deadlocks any pipeline that deploys the
+# attached app first.
+locals {
+  create_platform = var.existing_environment_name == ""
+}
+
 resource "azurerm_resource_group" "this" {
+  count    = local.create_platform ? 1 : 0
   name     = var.resource_group_name
   location = var.location
 }
 
+data "azurerm_resource_group" "existing" {
+  count = local.create_platform ? 0 : 1
+  name  = var.resource_group_name
+}
+
 # --- Log Analytics: persistent destination for container logs ---------------
 resource "azurerm_log_analytics_workspace" "this" {
+  count               = local.create_platform ? 1 : 0
   name                = "${var.service_name}-logs"
-  resource_group_name = azurerm_resource_group.this.name
-  location            = azurerm_resource_group.this.location
+  resource_group_name = local.resource_group_name
+  location            = local.location
   sku                 = "PerGB2018"
   retention_in_days   = 30
 }
 
+data "azurerm_log_analytics_workspace" "existing" {
+  count               = local.create_platform ? 0 : 1
+  name                = var.existing_log_workspace_name
+  resource_group_name = var.resource_group_name
+}
+
 # --- Managed environment (Consumption plan; scale-to-zero capable) -----------
 resource "azurerm_container_app_environment" "this" {
+  count                      = local.create_platform ? 1 : 0
   name                       = "${var.service_name}-env"
-  resource_group_name        = azurerm_resource_group.this.name
-  location                   = azurerm_resource_group.this.location
-  log_analytics_workspace_id = azurerm_log_analytics_workspace.this.id
+  resource_group_name        = local.resource_group_name
+  location                   = local.location
+  log_analytics_workspace_id = azurerm_log_analytics_workspace.this[0].id
+}
+
+# Every reference below goes through these, so the created and attached cases
+# read identically from here on.
+locals {
+  resource_group_name = (local.create_platform
+    ? azurerm_resource_group.this[0].name
+  : data.azurerm_resource_group.existing[0].name)
+  location = (local.create_platform
+    ? azurerm_resource_group.this[0].location
+  : data.azurerm_resource_group.existing[0].location)
+  environment_id = (local.create_platform
+    ? azurerm_container_app_environment.this[0].id
+  : data.azurerm_container_app_environment.existing[0].id)
+  environment_default_domain = (local.create_platform
+    ? azurerm_container_app_environment.this[0].default_domain
+  : data.azurerm_container_app_environment.existing[0].default_domain)
+  log_workspace_id = (local.create_platform
+    ? azurerm_log_analytics_workspace.this[0].workspace_id
+  : data.azurerm_log_analytics_workspace.existing[0].workspace_id)
+}
+
+data "azurerm_container_app_environment" "existing" {
+  count               = local.create_platform ? 0 : 1
+  name                = var.existing_environment_name
+  resource_group_name = var.resource_group_name
+}
+
+# Keep prod's state addresses valid across the `count` added above: without
+# these, `terraform apply` would destroy and recreate the environment, the
+# workspace and the resource group holding the live service.
+moved {
+  from = azurerm_resource_group.this
+  to   = azurerm_resource_group.this[0]
+}
+
+moved {
+  from = azurerm_log_analytics_workspace.this
+  to   = azurerm_log_analytics_workspace.this[0]
+}
+
+moved {
+  from = azurerm_container_app_environment.this
+  to   = azurerm_container_app_environment.this[0]
 }
 
 # Pulls a PUBLIC image from GHCR, so no `identity` / `registry` credentials are
 # needed.
 resource "azurerm_container_app" "this" {
   name                         = var.service_name
-  resource_group_name          = azurerm_resource_group.this.name
-  container_app_environment_id = azurerm_container_app_environment.this.id
+  resource_group_name          = local.resource_group_name
+  container_app_environment_id = local.environment_id
   revision_mode                = "Single"
 
   # Secrets stay out of the plain env; injected via secret_name below.
@@ -128,7 +201,7 @@ resource "azurerm_container_app" "this" {
           POLYMNEMO_OAUTH_ALLOWED_REDIRECT_URIS = var.oauth_allowed_redirect_uris
           POLYMNEMO_OAUTH_BASE_URL = join("", [
             "https://", var.service_name, ".",
-            azurerm_container_app_environment.this.default_domain,
+            local.environment_default_domain,
           ])
         }
         content {

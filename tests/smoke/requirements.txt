@@ -1,0 +1,6 @@
+# The smoke suites talk HTTP to a deployed polymnemo; they never import it, so
+# the workflow installs this instead of the package (which would drag in the
+# embedding model). Split out so setup-python's pip cache has a file to key on.
+pytest
+pytest-asyncio
+httpx
