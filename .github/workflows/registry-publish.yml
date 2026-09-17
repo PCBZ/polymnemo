@@ -4,56 +4,75 @@ name: Publish to MCP Registry
 # login, no stored secret. The workflow's OIDC token proves this repo owns the
 # io.github.PCBZ/* namespace, so `mcp-publisher login github-oidc` just works.
 #
-# The public endpoint comes from either the workflow_dispatch `mcp_endpoint`
-# input (type it in when you click "Run workflow") or, if that's blank, the
-# MCP_ENDPOINT repo variable. On a release tag (v*) the version is taken from the
-# tag. It syncs server.json in the runner and publishes that — it does NOT push
-# back to main (branch protection blocks that, and publish doesn't need it); the
-# committed server.json is kept correct directly. No-ops if no endpoint is
-# available from either source.
-
+# Runs AFTER the prod apply, not beside it (#140). It used to trigger on the
+# same `v*` tag as deploy.yml, so the two raced: server.json advertises a live
+# address, and that claim is only true once the deploy has succeeded. v1.2.3 and
+# v1.2.4 both failed to deploy while this workflow reported success — had it
+# been doing anything, the registry would now name two versions that never
+# shipped.
+#
+# The endpoint comes from the azure root's own Terraform output, not from an
+# MCP_ENDPOINT variable. A variable is one more thing to set, forget, or let
+# drift from the deployment it describes; the output is the address that was
+# just applied. That the variable was never set at all is why 15 consecutive
+# releases published nothing while reporting success (#140).
 on:
+  workflow_call:
   workflow_dispatch:
-    inputs:
-      mcp_endpoint:
-        description: "Public MCP endpoint URL, e.g. https://<app>.azurecontainerapps.io/mcp (leave blank to use the MCP_ENDPOINT repo variable)."
-        required: false
-        default: ""
-  push:
-    tags: ["v*"]
 
 jobs:
   publish:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     permissions:
       id-token: write # OIDC token to authenticate to the registry
       contents: read
+    env:
+      ARM_CLIENT_ID: ${{ secrets.ARM_CLIENT_ID }}
+      ARM_CLIENT_SECRET: ${{ secrets.ARM_CLIENT_SECRET }}
+      ARM_TENANT_ID: ${{ secrets.ARM_TENANT_ID }}
+      ARM_SUBSCRIPTION_ID: ${{ secrets.ARM_SUBSCRIPTION_ID }}
     steps:
+      # No `ref:` — the default is right in both directions. Called from
+      # deploy.yml on a tag it checks out that tag, which is the code being
+      # released; dispatched by hand it checks out the default branch.
       - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
         with:
-          ref: main # publish the canonical server.json from the default branch
+          terraform_version: "1.13.2"
 
-      - name: Resolve endpoint (dispatch input, else repo variable)
-        id: check
-        env:
-          INPUT_ENDPOINT: ${{ inputs.mcp_endpoint }}
-          VAR_ENDPOINT: ${{ vars.MCP_ENDPOINT }}
+      - name: Resolve the deployed endpoint
+        id: tf
+        working-directory: deploy/terraform/azure
         run: |
-          endpoint="${INPUT_ENDPOINT:-$VAR_ENDPOINT}"
+          terraform init \
+            -backend-config=resource_group_name=${{ vars.TFSTATE_RESOURCE_GROUP }} \
+            -backend-config=storage_account_name=${{ vars.TFSTATE_STORAGE_ACCOUNT }} \
+            -backend-config=container_name=${{ vars.TFSTATE_CONTAINER }} \
+            -backend-config=key=azure.tfstate
+          endpoint="$(terraform output -raw mcp_endpoint)"
+          # An error here must fail the run. This workflow spent fifteen
+          # releases green because its no-endpoint path was a `::notice::` and a
+          # skip — a publish workflow that cannot publish has failed.
           if [ -z "$endpoint" ]; then
-            echo "::notice::No endpoint — pass the mcp_endpoint input or set the MCP_ENDPOINT variable. Skipping."
-            echo "ready=false" >> "$GITHUB_OUTPUT"
-          else
-            echo "ready=true" >> "$GITHUB_OUTPUT"
-            echo "endpoint=$endpoint" >> "$GITHUB_OUTPUT"
+            echo "::error::terraform output mcp_endpoint is empty — is the app deployed?"
+            exit 1
           fi
+          echo "endpoint=$endpoint" >> "$GITHUB_OUTPUT"
+          echo "image=$(terraform output -raw deployed_image)" >> "$GITHUB_OUTPUT"
 
-      - name: Sync server.json (url from input/variable, version from tag)
-        if: steps.check.outputs.ready == 'true'
+      # Synced in the runner and published from there; this never pushes back to
+      # main (branch protection blocks it, and publishing does not need it). The
+      # committed server.json is kept correct on its own.
+      - name: Sync server.json
         env:
-          ENDPOINT: ${{ steps.check.outputs.endpoint }}
+          ENDPOINT: ${{ steps.tf.outputs.endpoint }}
+          IMAGE: ${{ steps.tf.outputs.image }}
         run: |
-          if [ "${{ github.ref_type }}" = "tag" ]; then
+          # On a tag the version comes from the tag; on a manual dispatch it
+          # comes from the committed server.json, which is what main says is
+          # current.
+          if [ "${{ github.ref_type }}" = tag ]; then
             jq --arg url "$ENDPOINT" --arg v "${GITHUB_REF_NAME#v}" \
                '.remotes[0].url = $url | .version = $v' server.json > server.json.tmp
           else
@@ -61,15 +80,29 @@ jobs:
           fi
           mv server.json.tmp server.json
 
+          # Do not advertise a version that is not the one serving. On the
+          # workflow_call path these always agree — azure applied this very
+          # tag's image moments ago. A manual dispatch is where they can drift:
+          # it takes the version from the checked-out server.json, which is
+          # ahead of production from the moment a bump PR merges until the
+          # deploy finishes. Publishing in that window would put the registry
+          # in exactly the state this change exists to prevent.
+          version="$(jq -r .version server.json)"
+          deployed="${IMAGE##*:}"
+          if [ "$deployed" != "v$version" ]; then
+            echo "::error::about to publish $version but the deployment is"\
+              "running $deployed. Deploy first, or dispatch from the ref that"\
+              "matches what is live."
+            exit 1
+          fi
+          echo "publishing $(jq -r '"\(.name) \(.version)"' server.json) at $ENDPOINT"
+
       - name: Install mcp-publisher
-        if: steps.check.outputs.ready == 'true'
         run: |
           curl -L "https://github.com/modelcontextprotocol/registry/releases/latest/download/mcp-publisher_$(uname -s | tr '[:upper:]' '[:lower:]')_$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/').tar.gz" | tar xz mcp-publisher
 
       - name: Authenticate (GitHub OIDC)
-        if: steps.check.outputs.ready == 'true'
         run: ./mcp-publisher login github-oidc
 
       - name: Publish server.json
-        if: steps.check.outputs.ready == 'true'
         run: ./mcp-publisher publish
