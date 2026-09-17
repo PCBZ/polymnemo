@@ -23,3 +23,8 @@ output "log_workspace_id" {
   value       = module.container_apps.log_workspace_id
 }
 
+
+output "deployed_image" {
+  description = "The image reference this deployment is running, so a publisher can check that what it is about to advertise is what is actually serving."
+  value       = var.image
+}

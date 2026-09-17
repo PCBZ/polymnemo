@@ -59,6 +59,7 @@ jobs:
             exit 1
           fi
           echo "endpoint=$endpoint" >> "$GITHUB_OUTPUT"
+          echo "image=$(terraform output -raw deployed_image)" >> "$GITHUB_OUTPUT"
 
       # Synced in the runner and published from there; this never pushes back to
       # main (branch protection blocks it, and publishing does not need it). The
@@ -66,6 +67,7 @@ jobs:
       - name: Sync server.json
         env:
           ENDPOINT: ${{ steps.tf.outputs.endpoint }}
+          IMAGE: ${{ steps.tf.outputs.image }}
         run: |
           # On a tag the version comes from the tag; on a manual dispatch it
           # comes from the committed server.json, which is what main says is
@@ -77,6 +79,22 @@ jobs:
             jq --arg url "$ENDPOINT" '.remotes[0].url = $url' server.json > server.json.tmp
           fi
           mv server.json.tmp server.json
+
+          # Do not advertise a version that is not the one serving. On the
+          # workflow_call path these always agree — azure applied this very
+          # tag's image moments ago. A manual dispatch is where they can drift:
+          # it takes the version from the checked-out server.json, which is
+          # ahead of production from the moment a bump PR merges until the
+          # deploy finishes. Publishing in that window would put the registry
+          # in exactly the state this change exists to prevent.
+          version="$(jq -r .version server.json)"
+          deployed="${IMAGE##*:}"
+          if [ "$deployed" != "v$version" ]; then
+            echo "::error::about to publish $version but the deployment is"\
+              "running $deployed. Deploy first, or dispatch from the ref that"\
+              "matches what is live."
+            exit 1
+          fi
           echo "publishing $(jq -r '"\(.name) \(.version)"' server.json) at $ENDPOINT"
 
       - name: Install mcp-publisher
