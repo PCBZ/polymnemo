@@ -108,7 +108,12 @@ jobs:
               "POLYMNEMO_TEST_API_KEYS."
             exit 1
           }
-          pytest tests/smoke/test_endpoints.py -v -o addopts=""
+          # confcutdir: without it pytest also loads tests/conftest.py, which
+          # imports polymnemo — and this job installs the HTTP deps only, on
+          # purpose. A dev machine has the package installed, so this failure
+          # can only ever appear in CI.
+          pytest tests/smoke/test_endpoints.py -v -o addopts="" \
+            --confcutdir=tests/smoke
 
   logs:
     name: logs (structured output)
@@ -129,4 +134,7 @@ jobs:
         env:
           POLYMNEMO_SMOKE_WORKSPACE: ${{ needs.resolve.outputs.workspace }}
           POLYMNEMO_SMOKE_APP: ${{ needs.resolve.outputs.app_name }}
-        run: pytest tests/smoke/test_logs.py -v -o addopts=""
+        # See the endpoints job: the ancestor conftest imports polymnemo.
+        run: >-
+          pytest tests/smoke/test_logs.py -v
+          -o addopts="" --confcutdir=tests/smoke
