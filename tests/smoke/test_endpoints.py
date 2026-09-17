@@ -12,8 +12,10 @@ have passed that bar while broken:
 Both live in the blind spot in-process tests cannot reach: configuration. So
 this asserts each route's contract against a real deployment.
 
-Read-only by design — nothing here writes a memory or mints a credential, so it
-is safe to point at any instance, production included.
+Read-only by design — nothing here writes a memory or mints a credential. It is
+still pointed only at the TEST deployment: it authenticates and reads real rows,
+and aiming that at production would mean keeping a key that opens production
+memories in CI for the sake of a check.
 """
 
 from __future__ import annotations
