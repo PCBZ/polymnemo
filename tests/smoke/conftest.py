@@ -8,6 +8,11 @@ runnable with no cloud, no network, and no credentials.
     POLYMNEMO_SMOKE_WORKSPACE=<Log Analytics customer id>   # log check only
     POLYMNEMO_SMOKE_APP=<container app name>                # log check only
 
+Two waits are overridable, because CI can afford patience and a developer
+cannot: POLYMNEMO_SMOKE_READY_TIMEOUT (default 300) for how long to wait for a
+freshly applied revision to start serving, and POLYMNEMO_SMOKE_LOG_TIMEOUT
+(default 600) for Log Analytics ingestion.
+
 The log check also reads ARM_TENANT_ID / ARM_CLIENT_ID / ARM_CLIENT_SECRET — the
 same service principal Terraform authenticates with, reused rather than minted
 again so there is one identity to grant workspace read to.

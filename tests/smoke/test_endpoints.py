@@ -19,6 +19,8 @@ is safe to point at any instance, production included.
 from __future__ import annotations
 
 import json
+import os
+import time
 from collections.abc import Iterator
 from urllib.parse import parse_qs, urlparse
 
@@ -26,6 +28,15 @@ import httpx
 import pytest
 
 TIMEOUT = httpx.Timeout(30.0, connect=60.0)  # the app scales to zero: cold start
+
+# A freshly applied revision is not serving yet — `terraform apply` returns when
+# Azure accepts the revision spec, not when the container is up — and the image
+# bakes in an embedding model, so a cold start is not quick. Paid once per
+# session, and only actually spent when something is wrong. Overridable for the
+# same reason the log suite's is: a deploy check can afford minutes of patience
+# pointed at a URL that is wrong, and a developer cannot.
+READY_TIMEOUT_SECONDS = int(os.environ.get("POLYMNEMO_SMOKE_READY_TIMEOUT", "300"))
+READY_POLL_SECONDS = 5
 
 MCP_HEADERS = {
     "Content-Type": "application/json",
@@ -38,7 +49,38 @@ TOOLS_LIST = {"jsonrpc": "2.0", "id": 1, "method": "tools/list"}
 def client(base_url: str):
     # Redirects are the contract here, so don't follow them.
     with httpx.Client(base_url=base_url, timeout=TIMEOUT, follow_redirects=False) as c:
+        _wait_until_serving(c, base_url)
         yield c
+
+
+def _wait_until_serving(client: httpx.Client, base_url: str) -> None:
+    """Block until the deployment answers at all, so the assertions below are
+    measuring its behaviour rather than its startup.
+
+    Any HTTP status counts — the root is a 404 and /mcp a 405, and neither is
+    what this is asking. It only wants to know that something is listening and
+    speaking HTTP; what it *says* is every other test in this file. A 5xx does
+    not count: that is the ingress with no healthy backend behind it, which is
+    exactly the green-apply-dead-container case worth waiting through.
+    """
+    deadline = time.monotonic() + READY_TIMEOUT_SECONDS
+    reason = "no response"
+    while True:
+        try:
+            response = client.get("/")
+            if response.status_code < 500:
+                return
+            reason = f"HTTP {response.status_code}"
+        except httpx.RequestError as exc:
+            reason = type(exc).__name__
+        if time.monotonic() > deadline:
+            break
+        time.sleep(READY_POLL_SECONDS)
+    pytest.fail(
+        f"{base_url} never served a response within {READY_TIMEOUT_SECONDS}s "
+        f"(last: {reason}) — the apply was green, so suspect the image: it is "
+        "pulled from a PUBLIC GHCR package with no credentials."
+    )
 
 
 def _mcp(client, body, key: str | None = None):
