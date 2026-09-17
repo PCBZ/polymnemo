@@ -13,22 +13,17 @@ name: smoke
 # `logs` runs second on purpose: it drives no traffic of its own, it looks for
 # the lines the `endpoints` job just produced.
 #
-# `environment` picks which deployment to check. On `test` this is a GATE — the
-# prod apply waits on it — so a failure here keeps a bad revision off prod.
+# This is a GATE — the prod apply waits on it — so a failure here keeps a bad
+# revision off production.
+#
+# It only ever targets the TEST deployment. Pointing it at production would mean
+# authenticated calls against real rows, and a key that opens production
+# memories sitting in CI for the sake of a test. The trade is named rather than
+# hidden: test and prod carry separate configuration, so this proves the image
+# and test's config, never prod's.
 on:
   workflow_call:
-    inputs:
-      environment:
-        description: "Which deployment to check: test or prod."
-        type: string
-        required: true
   workflow_dispatch:
-    inputs:
-      environment:
-        description: "Which deployment to check."
-        type: choice
-        options: [test, prod]
-        default: test
 
 permissions:
   contents: read
@@ -48,7 +43,7 @@ jobs:
   # threading them in as inputs, so `workflow_dispatch` works exactly like the
   # call from deploy.yml and there is one source of truth for the app's URL.
   resolve:
-    name: resolve (${{ inputs.environment }} coordinates)
+    name: resolve (test deployment coordinates)
     runs-on: ubuntu-latest
     timeout-minutes: 10
     outputs:
@@ -61,16 +56,9 @@ jobs:
         with:
           terraform_version: "1.13.2"
       - id: tf
-        env:
-          TARGET: ${{ inputs.environment }}
+        working-directory: deploy/terraform/azure-test
         run: |
-          case "$TARGET" in
-            test) dir=deploy/terraform/azure-test; key=azure-test.tfstate ;;
-            prod) dir=deploy/terraform/azure;      key=azure.tfstate ;;
-            *) echo "::error::unknown environment '$TARGET' (want test or prod)"; exit 1 ;;
-          esac
-          cd "$dir"
-          terraform init $TF_BACKEND "-backend-config=key=$key"
+          terraform init $TF_BACKEND -backend-config=key=azure-test.tfstate
           base_url="$(terraform output -raw service_url)"
           app_name="$(terraform output -raw app_name)"
           workspace="$(terraform output -raw log_workspace_id)"
@@ -81,7 +69,7 @@ jobs:
           for pair in "service_url=$base_url" "app_name=$app_name" \
                       "log_workspace_id=$workspace"; do
             [ -n "${pair#*=}" ] || {
-              echo "::error::terraform output ${pair%%=*} is empty — is $TARGET deployed?"
+              echo "::error::terraform output ${pair%%=*} is empty — is the test app deployed?"
               exit 1
             }
           done
@@ -92,7 +80,7 @@ jobs:
           } >> "$GITHUB_OUTPUT"
 
   endpoints:
-    name: endpoints (${{ inputs.environment }} route contracts)
+    name: endpoints (route contracts)
     needs: [resolve]
     runs-on: ubuntu-latest
     timeout-minutes: 15
@@ -108,32 +96,22 @@ jobs:
       - run: pip install -r tests/smoke/requirements.txt
       - name: Assert every route's contract
         env:
-          TARGET: ${{ inputs.environment }}
-          TEST_KEY: ${{ secrets.POLYMNEMO_TEST_SMOKE_KEY }}
-          PROD_KEY: ${{ secrets.POLYMNEMO_SMOKE_KEY }}
           POLYMNEMO_SMOKE_URL: ${{ needs.resolve.outputs.base_url }}
+          POLYMNEMO_SMOKE_KEY: ${{ secrets.POLYMNEMO_TEST_SMOKE_KEY }}
         run: |
-          # Picked explicitly, never with a `&&/||` fallback: an unset test key
-          # would fall through to the prod key and quietly point production
-          # credentials at the test app.
-          if [ "$TARGET" = test ]; then
-            export POLYMNEMO_SMOKE_KEY="$TEST_KEY"
-          else
-            export POLYMNEMO_SMOKE_KEY="$PROD_KEY"
-          fi
           # The suite skips itself when unconfigured so the offline unit tests
           # stay runnable, and that is exactly how a post-deploy check goes green
           # while asserting nothing — the #128 failure mode again.
           [ -n "$POLYMNEMO_SMOKE_KEY" ] || {
-            echo "::error::no smoke key configured for '$TARGET' — every"\
+            echo "::error::POLYMNEMO_TEST_SMOKE_KEY is unset, so every"\
               "authenticated check would silently skip. It must also appear in"\
-              "that deployment's API key list."
+              "POLYMNEMO_TEST_API_KEYS."
             exit 1
           }
           pytest tests/smoke/test_endpoints.py -v -o addopts=""
 
   logs:
-    name: logs (${{ inputs.environment }} structured output)
+    name: logs (structured output)
     needs: [resolve, endpoints]
     runs-on: ubuntu-latest
     timeout-minutes: 20

@@ -10,16 +10,22 @@ name: deploy (azure)
 #
 # Job graph (GitHub renders this live in the run's "graph" view):
 #
-#   neon --> schema --+--> test ------> azure-test --> smoke(test) --> azure --> smoke(prod)
-#                     '--> azure          ^                          ^
-#   r2 -------------------> azure         |                          |
-#   r2-test ------------------------------'                          |
-#   build (image) ---------------------------------------------------'
+#   neon --> schema --+--> test ------> azure-test --> smoke --> azure
+#                     '--> azure          ^                      ^
+#   r2 -------------------> azure         |                      |
+#   r2-test ------------------------------'                      |
+#   build (image) ------------------------------------------------'
 #
-# The shape that matters: smoke(test) is a GATE. The prod apply needs it, so a
+# The shape that matters: smoke is a GATE. The prod apply needs it, so a
 # revision that fails a route contract or stops emitting its call log never
 # reaches production — which is exactly how #123 shipped a service where every
-# bearer key 401'd. smoke(prod) runs after, read-only, as the final word.
+# bearer key 401'd.
+#
+# Nothing is smoke-tested against production, deliberately. The checks make
+# authenticated calls and read real rows, and pointing them at prod would mean
+# keeping a key that opens production memories in CI for the sake of a test.
+# The cost is real and worth naming: test and prod carry separate configuration,
+# so this gate proves the image and test's config, never prod's.
 #
 # test/ and r2-test/ give the test app its own database branch and media bucket:
 # same structure as prod, isolated data. The image is built ONCE and both
@@ -224,17 +230,15 @@ jobs:
           echo "Test MCP endpoint: $(terraform output -raw service_url)/mcp"
 
   # THE GATE. Prod waits on this.
-  smoke-test:
-    name: smoke (test)
+  smoke:
+    name: smoke (test deployment)
     needs: [azure-test]
     uses: ./.github/workflows/smoke.yml
-    with:
-      environment: test
     secrets: inherit
 
   azure:
     name: azure (deploy prod app)
-    needs: [build, r2, schema, smoke-test]
+    needs: [build, r2, schema, smoke]
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -254,16 +258,6 @@ jobs:
           terraform init $TF_BACKEND -backend-config=key=azure.tfstate
           terraform apply -auto-approve
           echo "MCP endpoint: $(terraform output -raw service_url)/mcp"
-
-  # Read-only, and after the fact: the gate already passed on the same image, so
-  # this is confirmation that prod's own configuration matches.
-  smoke-prod:
-    name: smoke (prod)
-    needs: [azure]
-    uses: ./.github/workflows/smoke.yml
-    with:
-      environment: prod
-    secrets: inherit
 
   # The #89/#96 measurement branch: a copy-on-write Neon branch of prod, so a
   # locally-run DEBUG server has somewhere to read and write without touching
