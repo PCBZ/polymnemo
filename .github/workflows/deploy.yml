@@ -2,15 +2,16 @@ name: deploy (azure)
 
 # Deploy to Azure Container Apps. Primary trigger is a **v* release tag**: it
 # builds + runs that exact tag (image tagged with the version) and, via
-# registry-publish.yml (same tag trigger), publishes the registry entry — so one
-# tag = deployed state = registered version. workflow_dispatch stays for manual/
+# registry-publish.yml — called from here once prod is serving, not on its own
+# tag trigger (#140) — publishes the registry entry, so one tag = deployed state
+# = registered version, in that order. workflow_dispatch stays for manual/
 # emergency deploys of a branch. All secrets come from GitHub Secrets/Variables
 # (see scripts/setup-github-secrets.sh and scripts/bootstrap-tfstate-azure.sh);
 # nothing is stored in the repo.
 #
 # Job graph (GitHub renders this live in the run's "graph" view):
 #
-#   neon --> schema --+--> test ------> azure-test --> smoke --> azure
+#   neon --> schema --+--> test ------> azure-test --> smoke --> azure --> registry
 #                     '--> azure          ^                      ^
 #   r2 -------------------> azure         |                      |
 #   r2-test ------------------------------'                      |
@@ -258,6 +259,18 @@ jobs:
           terraform init $TF_BACKEND -backend-config=key=azure.tfstate
           terraform apply -auto-approve
           echo "MCP endpoint: $(terraform output -raw service_url)/mcp"
+
+  # Only after prod is actually serving the new version. server.json advertises
+  # a live address, and that claim is false until the apply above succeeds —
+  # this used to trigger on the same tag and run beside the deploy (#140).
+  registry:
+    name: registry (publish server.json)
+    needs: [azure]
+    uses: ./.github/workflows/registry-publish.yml
+    permissions:
+      contents: read
+      id-token: write
+    secrets: inherit
 
   # The #89/#96 measurement branch: a copy-on-write Neon branch of prod, so a
   # locally-run DEBUG server has somewhere to read and write without touching
