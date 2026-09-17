@@ -23,18 +23,3 @@ output "log_workspace_id" {
   value       = module.container_apps.log_workspace_id
 }
 
-# --- Consumed by the azure-test/ root, which shares this platform ------------
-output "environment_id" {
-  description = "Container App Environment id — the test root attaches to it."
-  value       = module.container_apps.environment_id
-}
-
-output "environment_name" {
-  description = "Container App Environment name."
-  value       = module.container_apps.environment_name
-}
-
-output "log_workspace_name" {
-  description = "Log Analytics workspace name (ARM resource, not the query GUID)."
-  value       = module.container_apps.log_workspace_name
-}

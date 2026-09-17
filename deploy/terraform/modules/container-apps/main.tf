@@ -10,12 +10,16 @@
 # --- Platform: created once, then shared -------------------------------------
 # The subscription allows ONE managed environment per region (measured: westus2
 # reports "Managed Environment Count 1/1"), so a second app in the same region
-# cannot bring its own. `existing_environment_id` attaches to the one that is
-# already there; leaving it empty creates the whole platform, which is what the
-# prod root does. Cores are the quota that actually matters for a second app,
-# and those are 1/100.
+# cannot bring its own. Naming an existing environment attaches to it; leaving
+# it empty creates the whole platform, which is what the prod root does. Cores
+# are the quota that actually matters for a second app, and those are 1/100.
+#
+# Attaching keys off NAMES and resolves everything else through data sources —
+# never an id threaded in from another root's outputs. Those outputs only exist
+# once that root has applied, which deadlocks any pipeline that deploys the
+# attached app first.
 locals {
-  create_platform = var.existing_environment_id == ""
+  create_platform = var.existing_environment_name == ""
 }
 
 resource "azurerm_resource_group" "this" {
@@ -65,7 +69,7 @@ locals {
   : data.azurerm_resource_group.existing[0].location)
   environment_id = (local.create_platform
     ? azurerm_container_app_environment.this[0].id
-  : var.existing_environment_id)
+  : data.azurerm_container_app_environment.existing[0].id)
   environment_default_domain = (local.create_platform
     ? azurerm_container_app_environment.this[0].default_domain
   : data.azurerm_container_app_environment.existing[0].default_domain)

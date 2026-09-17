@@ -80,3 +80,12 @@ variable "tfstate_container" {
   description = "Blob container holding the Terraform state."
 }
 
+
+# The prod root's service_name. The shared platform is named after it
+# ("<name>-env", "<name>-logs"), which is how this root finds it without
+# reading prod's state.
+variable "platform_service_name" {
+  description = "service_name of the deployment that owns the shared platform."
+  type        = string
+  default     = "polymnemo"
+}

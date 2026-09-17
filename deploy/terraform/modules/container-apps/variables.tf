@@ -127,18 +127,16 @@ variable "max_replicas" {
 }
 
 # --- Attaching to an existing platform ---------------------------------------
-# Set all three together to put this app next to one that already exists, rather
-# than creating a resource group / workspace / environment of its own. The test
-# app does this because the subscription allows one managed environment per
-# region. Leave them empty (the default) to create the platform.
-variable "existing_environment_id" {
-  description = "Container App Environment to attach to. Empty creates one."
-  type        = string
-  default     = ""
-}
-
+# Set both together to put this app next to one that already exists, rather than
+# creating a resource group / workspace / environment of its own. The test app
+# does this because the subscription allows one managed environment per region.
+# Leave them empty (the default) to create the platform.
+#
+# Names, not ids: a name is a deterministic string the caller already knows,
+# while an id has to come from the other root's state and therefore only exists
+# after that root has applied.
 variable "existing_environment_name" {
-  description = "Name of that environment, for looking up its default domain."
+  description = "Container App Environment to attach to. Empty creates one."
   type        = string
   default     = ""
 }

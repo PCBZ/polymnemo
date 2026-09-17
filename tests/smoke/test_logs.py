@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import time
 
 import httpx
@@ -72,6 +73,12 @@ def recent_lines(workspace: str, app_name: str, log_token: str) -> list[dict]:
     Session-scoped so the wait is paid once: every assertion below reads the
     same fetch.
     """
+    # KQL has no parameter binding here, so the name goes in by interpolation.
+    # Azure restricts container app names to this shape, and asserting it says
+    # so out loud rather than leaving the query to depend on it silently.
+    assert re.fullmatch(r"[a-zA-Z0-9-]+", app_name), (
+        f"unexpected app name: {app_name!r}"
+    )
     query = (
         "ContainerAppConsoleLogs_CL"
         f" | where TimeGenerated > ago(30m) and ContainerAppName_s == '{app_name}'"

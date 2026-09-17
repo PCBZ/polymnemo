@@ -19,6 +19,7 @@ is safe to point at any instance, production included.
 from __future__ import annotations
 
 import json
+from collections.abc import Iterator
 from urllib.parse import parse_qs, urlparse
 
 import httpx
@@ -198,34 +199,47 @@ class TestNothingReturnsServerError:
         assert r.status_code < 500, f"{path} -> {r.status_code}: {r.text[:200]}"
 
 
-def _result(body: str) -> dict:
-    """The `result` object out of a JSON-RPC reply, plain or SSE-framed."""
+def _frames(body: str) -> Iterator[dict]:
+    """JSON objects out of a response body, plain or SSE-framed.
+
+    One place to fix when the framing changes, instead of two scanners that
+    have to agree.
+    """
     for line in body.splitlines():
         line = line.removeprefix("data:").strip()
         if not line.startswith("{"):
             continue
         try:
-            payload = json.loads(line)
+            yield json.loads(line)
         except json.JSONDecodeError:
             continue
+
+
+def _result(body: str) -> dict:
+    """The `result` object out of a JSON-RPC reply."""
+    for payload in _frames(body):
         if "result" in payload:
             return payload["result"]
-        if "error" in payload:
-            raise AssertionError(f"JSON-RPC error: {payload['error']}")
+        _raise_if_error(payload)
     raise AssertionError(f"no JSON-RPC result in response: {body[:300]}")
 
 
 def _tool_names(body: str) -> set[str]:
-    """Tool names out of a response that may be plain JSON or an SSE frame."""
-    for line in body.splitlines():
-        line = line.removeprefix("data:").strip()
-        if not line.startswith("{"):
-            continue
-        try:
-            payload = json.loads(line)
-        except json.JSONDecodeError:
-            continue
+    """Tool names out of a tools/list reply."""
+    for payload in _frames(body):
         tools = payload.get("result", {}).get("tools")
         if tools is not None:
             return {t["name"] for t in tools}
+        _raise_if_error(payload)
     raise AssertionError(f"no tools/list result in response: {body[:300]}")
+
+
+def _raise_if_error(payload: dict) -> None:
+    """Surface a JSON-RPC error instead of letting the scan fall through.
+
+    Without this, "every bearer key is refused" — the exact bug this suite
+    exists to catch — surfaces as a confusing "no result in response" parser
+    failure with the actual error object nowhere in the output.
+    """
+    if "error" in payload:
+        raise AssertionError(f"JSON-RPC error: {payload['error']}")

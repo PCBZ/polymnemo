@@ -18,18 +18,3 @@ output "log_workspace_id" {
   value       = local.log_workspace_id
 }
 
-# --- For a second app attaching to this platform -----------------------------
-output "environment_id" {
-  description = "Container App Environment id, for another root's existing_environment_id."
-  value       = local.environment_id
-}
-
-output "environment_name" {
-  description = "Container App Environment name."
-  value       = local.create_platform ? azurerm_container_app_environment.this[0].name : var.existing_environment_name
-}
-
-output "log_workspace_name" {
-  description = "Log Analytics workspace NAME (the ARM resource), distinct from log_workspace_id, which is the query GUID."
-  value       = local.create_platform ? azurerm_log_analytics_workspace.this[0].name : var.existing_log_workspace_name
-}

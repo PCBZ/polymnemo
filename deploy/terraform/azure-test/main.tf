@@ -10,16 +10,10 @@
 # allows one managed environment per region (westus2 reports 1/1), so a second
 # one here is impossible. Sharing them costs nothing that matters: neither holds
 # application data, and the log query already scopes by ContainerAppName_s.
-
-data "terraform_remote_state" "prod" {
-  backend = "azurerm"
-  config = {
-    resource_group_name  = var.tfstate_resource_group
-    storage_account_name = var.tfstate_storage_account
-    container_name       = var.tfstate_container
-    key                  = "azure.tfstate"
-  }
-}
+#
+# This root reads NO state from azure/. It looks the shared platform up by name
+# through the module, so it can apply before prod ever has — which it must,
+# since the smoke run against this app gates the prod deploy.
 
 # The isolated database: a copy-on-write Neon branch of prod, created and kept
 # schema-current by the `test` job in deploy.yml.
@@ -49,12 +43,15 @@ module "container_apps" {
   image           = var.image
   revision_suffix = var.revision_suffix
 
-  # Attach to prod's platform rather than creating a second one.
+  # Attach to prod's platform rather than creating a second one. By NAME, and
+  # deliberately not by reading azure/'s state: those outputs only exist after
+  # that root applies, and this root runs first — the gate is upstream of the
+  # prod deploy. The names are how the module builds them, so they are already
+  # determined by prod's service_name.
   resource_group_name         = var.resource_group_name
   location                    = var.location
-  existing_environment_id     = data.terraform_remote_state.prod.outputs.environment_id
-  existing_environment_name   = data.terraform_remote_state.prod.outputs.environment_name
-  existing_log_workspace_name = data.terraform_remote_state.prod.outputs.log_workspace_name
+  existing_environment_name   = "${var.platform_service_name}-env"
+  existing_log_workspace_name = "${var.platform_service_name}-logs"
 
   # --- The isolation ---------------------------------------------------------
   database_url = data.terraform_remote_state.neon_test.outputs.database_url
