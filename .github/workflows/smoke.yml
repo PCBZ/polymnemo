@@ -1,26 +1,28 @@
 name: smoke
 
-# Post-deploy checks against a *running* deployment (#129).
+# Post-deploy checks against the running TEST deployment (#129).
 #
 # A `terraform apply` is called good as soon as the app returns any HTTP status,
 # which only proves the container started. #123 (every bearer key 401'd) and
 # #128 (token pages 404, POLYMNEMO_LOG_FORMAT never injected) both cleared that
-# bar. These jobs assert the contracts that live in configuration, where
-# in-process tests cannot reach.
-#
-#   resolve --> endpoints --> logs
-#
-# `logs` runs second on purpose: it drives no traffic of its own, it looks for
-# the lines the `endpoints` job just produced.
+# bar. This asserts the contracts that live in configuration, where in-process
+# tests cannot reach.
 #
 # This is a GATE — the prod apply waits on it — so a failure here keeps a bad
-# revision off production.
+# revision off production. Including the log check: that is what catches a
+# #128, and moving it off the gate to save the ~30s it usually takes would
+# trade the defence for the wrong side of the bargain.
 #
 # It only ever targets the TEST deployment. Pointing it at production would mean
 # authenticated calls against real rows, and a key that opens production
 # memories sitting in CI for the sake of a test. The trade is named rather than
 # hidden: test and prod carry separate configuration, so this proves the image
 # and test's config, never prod's.
+#
+# ONE job on purpose. Resolve, endpoints and logs were three, which bought no
+# parallelism — logs reads the lines endpoints just produced, so they are
+# inherently serial — and cost two extra runner startups plus the gaps between
+# them: 18s + 9s + 7s, measured on the v1.2.3 run.
 on:
   workflow_call:
   workflow_dispatch:
@@ -28,75 +30,67 @@ on:
 permissions:
   contents: read
 
-env:
-  ARM_CLIENT_ID: ${{ secrets.ARM_CLIENT_ID }}
-  ARM_CLIENT_SECRET: ${{ secrets.ARM_CLIENT_SECRET }}
-  ARM_TENANT_ID: ${{ secrets.ARM_TENANT_ID }}
-  ARM_SUBSCRIPTION_ID: ${{ secrets.ARM_SUBSCRIPTION_ID }}
-  TF_BACKEND: >-
-    -backend-config=resource_group_name=${{ vars.TFSTATE_RESOURCE_GROUP }}
-    -backend-config=storage_account_name=${{ vars.TFSTATE_STORAGE_ACCOUNT }}
-    -backend-config=container_name=${{ vars.TFSTATE_CONTAINER }}
-
 jobs:
-  # Read the deployment's own coordinates out of Terraform state rather than
-  # threading them in as inputs, so `workflow_dispatch` works exactly like the
-  # call from deploy.yml and there is one source of truth for the app's URL.
-  resolve:
-    name: resolve (test deployment coordinates)
+  smoke:
+    name: smoke (test deployment)
     runs-on: ubuntu-latest
-    timeout-minutes: 10
-    outputs:
-      base_url: ${{ steps.tf.outputs.base_url }}
-      app_name: ${{ steps.tf.outputs.app_name }}
-      workspace: ${{ steps.tf.outputs.workspace }}
+    # The log check waits out ingestion, which has been measured as high as
+    # 359s on this workspace, and its own deadline is 600s.
+    timeout-minutes: 25
+    env:
+      ARM_CLIENT_ID: ${{ secrets.ARM_CLIENT_ID }}
+      ARM_CLIENT_SECRET: ${{ secrets.ARM_CLIENT_SECRET }}
+      ARM_TENANT_ID: ${{ secrets.ARM_TENANT_ID }}
+      ARM_SUBSCRIPTION_ID: ${{ secrets.ARM_SUBSCRIPTION_ID }}
     steps:
       - uses: actions/checkout@v4
       - uses: hashicorp/setup-terraform@v3
         with:
           terraform_version: "1.13.2"
-      - id: tf
+
+      # Read the deployment's own coordinates out of Terraform state rather than
+      # taking them as inputs, so `workflow_dispatch` works exactly like the
+      # call from deploy.yml and there is one source of truth for the app's URL.
+      # Exported as the variable names the suites already read, so the pytest
+      # steps below need no env mapping.
+      - name: Resolve the test deployment's coordinates
         working-directory: deploy/terraform/azure-test
         run: |
-          terraform init $TF_BACKEND -backend-config=key=azure-test.tfstate
-          base_url="$(terraform output -raw service_url)"
-          app_name="$(terraform output -raw app_name)"
+          terraform init \
+            -backend-config=resource_group_name=${{ vars.TFSTATE_RESOURCE_GROUP }} \
+            -backend-config=storage_account_name=${{ vars.TFSTATE_STORAGE_ACCOUNT }} \
+            -backend-config=container_name=${{ vars.TFSTATE_CONTAINER }} \
+            -backend-config=key=azure-test.tfstate
+          url="$(terraform output -raw service_url)"
+          app="$(terraform output -raw app_name)"
           workspace="$(terraform output -raw log_workspace_id)"
           # A missing output makes `terraform output` fail, but the command
           # substitution around it does not fail the `echo` — so without this
           # the empty value reaches the suite, which skips itself for lack of
           # configuration and the whole check passes having asserted nothing.
-          for pair in "service_url=$base_url" "app_name=$app_name" \
-                      "log_workspace_id=$workspace"; do
+          for pair in "service_url=$url" "app_name=$app" "log_workspace_id=$workspace"; do
             [ -n "${pair#*=}" ] || {
               echo "::error::terraform output ${pair%%=*} is empty — is the test app deployed?"
               exit 1
             }
           done
           {
-            echo "base_url=$base_url"
-            echo "app_name=$app_name"
-            echo "workspace=$workspace"
-          } >> "$GITHUB_OUTPUT"
+            echo "POLYMNEMO_SMOKE_URL=$url"
+            echo "POLYMNEMO_SMOKE_APP=$app"
+            echo "POLYMNEMO_SMOKE_WORKSPACE=$workspace"
+          } >> "$GITHUB_ENV"
 
-  endpoints:
-    name: endpoints (route contracts)
-    needs: [resolve]
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-    steps:
-      - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
           cache: pip
           cache-dependency-path: tests/smoke/requirements.txt
       # Only what the HTTP checks need. Installing the package would drag in the
-      # embedding model for a suite that never imports polymnemo.
+      # embedding model for suites that never import polymnemo.
       - run: pip install -r tests/smoke/requirements.txt
-      - name: Assert every route's contract
+
+      - name: Every route's contract
         env:
-          POLYMNEMO_SMOKE_URL: ${{ needs.resolve.outputs.base_url }}
           POLYMNEMO_SMOKE_KEY: ${{ secrets.POLYMNEMO_TEST_SMOKE_KEY }}
         run: |
           # The suite skips itself when unconfigured so the offline unit tests
@@ -115,26 +109,8 @@ jobs:
           pytest tests/smoke/test_endpoints.py -v -o addopts="" \
             --confcutdir=tests/smoke
 
-  logs:
-    name: logs (structured output)
-    needs: [resolve, endpoints]
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
-          cache: pip
-          cache-dependency-path: tests/smoke/requirements.txt
-      - run: pip install -r tests/smoke/requirements.txt
-      # No `az login` step: the suite calls the Log Analytics query API over
-      # HTTP and gets its own token from the ARM_* values already in `env`.
-      - name: Assert the logs arrive in the expected shape
-        env:
-          POLYMNEMO_SMOKE_WORKSPACE: ${{ needs.resolve.outputs.workspace }}
-          POLYMNEMO_SMOKE_APP: ${{ needs.resolve.outputs.app_name }}
-        # See the endpoints job: the ancestor conftest imports polymnemo.
+      # Second, not in parallel: it looks for the lines the step above produced.
+      - name: Structured logs reach Log Analytics
         run: >-
           pytest tests/smoke/test_logs.py -v
           -o addopts="" --confcutdir=tests/smoke
