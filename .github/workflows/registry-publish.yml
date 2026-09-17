@@ -40,6 +40,10 @@ jobs:
       - uses: hashicorp/setup-terraform@v3
         with:
           terraform_version: "1.13.2"
+          # The wrapper echoes ::error:: annotations to STDOUT, so a failing
+          # `terraform output` inside $(...) yields that text instead of
+          # nothing — which defeats every "is it empty?" guard below.
+          terraform_wrapper: false
 
       - name: Resolve the deployed endpoint
         id: tf
@@ -59,7 +63,19 @@ jobs:
             exit 1
           fi
           echo "endpoint=$endpoint" >> "$GITHUB_OUTPUT"
-          echo "image=$(terraform output -raw deployed_image)" >> "$GITHUB_OUTPUT"
+          # From the resource in state, not an output: an output added in the
+          # same change does not exist until that root applies again, and this
+          # job runs before any such apply. The attribute has always been there,
+          # and it is what is actually running rather than what was requested.
+          image="$(terraform show -json | jq -r '
+            .values.root_module.child_modules[]?.resources[]?
+            | select(.type == "azurerm_container_app")
+            | .values.template[0].container[0].image')"
+          if [ -z "$image" ]; then
+            echo "::error::could not read the deployed image from state"
+            exit 1
+          fi
+          echo "image=$image" >> "$GITHUB_OUTPUT"
 
       # Synced in the runner and published from there; this never pushes back to
       # main (branch protection blocks it, and publishing does not need it). The

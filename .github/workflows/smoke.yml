@@ -47,6 +47,10 @@ jobs:
       - uses: hashicorp/setup-terraform@v3
         with:
           terraform_version: "1.13.2"
+          # The wrapper echoes ::error:: annotations to STDOUT, so a failing
+          # `terraform output` inside $(...) yields that text instead of
+          # nothing — which defeats every "is it empty?" guard below.
+          terraform_wrapper: false
 
       # Read the deployment's own coordinates out of Terraform state rather than
       # taking them as inputs, so `workflow_dispatch` works exactly like the
