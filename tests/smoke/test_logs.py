@@ -96,7 +96,11 @@ def recent_lines(workspace: str, app_name: str, log_token: str) -> list[dict]:
     rows: list[dict] = []
     while True:
         rows = _structured(_query(workspace, query, log_token))
-        if rows or time.monotonic() > deadline:
+        # Wait for what the assertions below actually need, not merely for
+        # *some* structured line. The startup banner is ingested well before
+        # the endpoint step's traffic, so `if rows` ended the poll on the first
+        # query every time and the call-log assertions raced ingestion.
+        if attributed_calls(rows) or time.monotonic() > deadline:
             break
         time.sleep(POLL_SECONDS)
 
@@ -107,6 +111,9 @@ def recent_lines(workspace: str, app_name: str, log_token: str) -> list[dict]:
             "emitting JSON (POLYMNEMO_LOG_FORMAT unset?) or ingestion is slower "
             "than this timeout"
         )
+    # Deliberately not failing here when the call lines are missing: the three
+    # tests below distinguish "no JSON", "no call log" and "no identity", and
+    # each message names a different fault.
     return rows
 
 
@@ -141,6 +148,16 @@ def _structured(rows: list[dict]) -> list[dict]:
     return out
 
 
+def call_lines(rows: list[dict]) -> list[dict]:
+    return [ln for ln in rows if ln.get("logger") == CALL_LOGGER]
+
+
+def attributed_calls(rows: list[dict]) -> list[dict]:
+    """Call-log lines that carry an identity — the strongest of the three
+    conditions asserted below, so waiting for it implies the other two."""
+    return [ln for ln in call_lines(rows) if ln.get("user_id")]
+
+
 def test_the_deployment_emits_structured_logs(recent_lines):
     """#128 exactly: with POLYMNEMO_LOG_FORMAT unset the app logs prose, and
     every log-based metric silently returns nothing.
@@ -158,7 +175,7 @@ def test_the_deployment_emits_structured_logs(recent_lines):
 def test_the_call_log_is_being_written(recent_lines):
     """That the middleware registered and its path works end to end. Without
     it the service still serves every request — it just records none of them."""
-    calls = [ln for ln in recent_lines if ln.get("logger") == CALL_LOGGER]
+    calls = call_lines(recent_lines)
     assert calls, (
         f"no {CALL_LOGGER} lines; the endpoint job's own traffic should have "
         "produced them"
@@ -172,11 +189,7 @@ def test_an_authenticated_call_is_attributed(recent_lines):
     """The identity plumbing, end to end on a real deployment: the injected
     resolver, the per-request scope, and the worker-thread hop a sync tool
     takes — each of which broke at least once while #128 was in review."""
-    attributed = [
-        ln
-        for ln in recent_lines
-        if ln.get("logger") == CALL_LOGGER and ln.get("user_id")
-    ]
+    attributed = attributed_calls(recent_lines)
     assert attributed, (
         "no call-log line carries a user_id, though the endpoint job made "
         "authenticated calls"
