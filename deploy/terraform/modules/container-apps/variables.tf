@@ -102,15 +102,27 @@ variable "blob_secret_access_key" {
   description = "R2 S3 secret access key, injected (as a secret) into POLYMNEMO_BLOB_SECRET_ACCESS_KEY."
 }
 
+# Sized from measurement, not from the default. Over 24h of production the
+# container peaked at 137 MB of its 2Gi (6%) and 0.402 of its 1 vCPU (40%),
+# averaging 0.007 vCPU — the app is idle almost always and bursty when it is
+# not, because the only real work is an embedding.
+#
+# Halving both halves the bill: Container Apps charges per vCPU-second and
+# GiB-second of active time, and the app is active ~86% of the day whatever
+# the traffic (crawlers keep it awake — see the cost analysis in #146).
+#
+# 0.5 leaves the CPU peak at ~80% of quota, which is deliberate: that peak is
+# the ONNX model initialising on a cold start, and it degrades by getting
+# slower rather than by failing. 0.25 would put it at 160% and throttle.
 variable "cpu" {
   type        = number
-  default     = 1.0
-  description = "vCPU per replica. Container Apps fixes cpu:memory at 1:2 (1.0 -> 2Gi)."
+  default     = 0.5
+  description = "vCPU per replica. Container Apps fixes cpu:memory at 1:2 (0.5 -> 1Gi)."
 }
 
 variable "memory" {
   type        = string
-  default     = "2Gi"
+  default     = "1Gi"
   description = "Memory per replica; must match the cpu:memory 1:2 ratio."
 }
 
@@ -118,6 +130,24 @@ variable "min_replicas" {
   type        = number
   default     = 0
   description = "0 = scale to zero when idle."
+}
+
+# How long a replica stays alive after its last request — and therefore how
+# long it is billed for. The default is 300s, which is the single largest cost
+# driver here: the app is probed by MCP directory crawlers every ~35s (median),
+# so at 300s every probe buys five minutes and the replica never sleeps.
+#
+# Measured over 24h of real traffic (847 requests), active time by cooldown:
+#   300s -> 20.7h/day   120s -> 12.6h/day   60s -> 7.3h/day   30s -> 4.0h/day
+#
+# The saving does not come from shorter tails — those roughly cancel against
+# the larger number of clusters. It comes from the 185 gaps that fall between
+# 120s and 300s: at 300s those are *inside* a billed window, at 60s they are
+# sleep. 30s buys little more while adding cold starts, which cost ~4s each.
+variable "cooldown_seconds" {
+  type        = number
+  default     = 60
+  description = "Seconds a replica stays warm after its last request. Billed time."
 }
 
 variable "max_replicas" {

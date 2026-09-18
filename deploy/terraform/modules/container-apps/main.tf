@@ -155,8 +155,9 @@ resource "azurerm_container_app" "this" {
   }
 
   template {
-    min_replicas = var.min_replicas
-    max_replicas = var.max_replicas
+    min_replicas               = var.min_replicas
+    max_replicas               = var.max_replicas
+    cooldown_period_in_seconds = var.cooldown_seconds
 
     # A changing suffix forces a new revision each deploy (so a re-run actually
     # rolls out); empty lets Azure auto-generate one.
