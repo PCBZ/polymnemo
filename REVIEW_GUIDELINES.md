@@ -3,7 +3,7 @@
 **polymnemo** — a provider-agnostic, cross-LLM shared long-term memory exposed as an **MCP server**.
 
 - **Stack**: Python 3.11+, FastMCP (Streamable HTTP at `/mcp`), fastembed (local ONNX embeddings), pydantic-settings. Postgres + pgvector (Neon) is the production store; an in-memory store backs local dev/tests.
-- **Deploy**: stateless container on Cloud Run; all state in Neon.
+- **Deploy**: stateless container on Azure Container Apps (scale-to-zero); Cloud Run is a backup target. Durable state is split: memory rows and vectors in Neon, media blobs in Cloudflare R2 (`blob=S3BlobStore` in production).
 - **Principles**: plain text is the single source of truth; **zero external / generative-LLM calls** (embeddings run locally, deterministically); three pluggable layers — **Auth / Store / Retriever** — assembled in `context.build_context()`.
 
 ## Architecture conventions
@@ -14,7 +14,7 @@
   - `retriever/` — `Retriever` protocol + `VectorRetriever` (embeds query, delegates NN to the store).
   - `embedding/` — `Embedder` protocol + `FastEmbedEmbedder` (real) / `StubEmbedder` (offline dev).
   - `service.py` — `MemoryService`: business logic (chunk → embed → persist); tools stay thin.
-  - `server.py` — FastMCP tools; `_current_user()` authenticates from request headers.
+  - `server.py` — FastMCP tools; `tooling.current_user()` authenticates from request headers and records the identity in a per-request scope.
   - `context.py` — composition root (frozen dataclass); selects implementations by config.
 - **Deliberate patterns — do not suggest changing:**
   - Layers are `typing.Protocol`s; implementations intentionally don't inherit them (structural typing for pluggability).
@@ -24,6 +24,8 @@
 - **Known / accepted for now (don't flag):**
   - `StaticAuth`, `InMemoryStore`, `StubEmbedder` are dev-only placeholders selected by config.
   - A benign fastembed mean-pooling `UserWarning` on model load.
+
+  - `logging.py` — one JSON line per MCP call, plus pinned auth/audit loggers. The identity resolver is **injected** by the composition root; this module must not import auth.
 
 ## Code review guidance
 
