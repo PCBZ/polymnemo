@@ -1,0 +1,79 @@
+# CodeRabbit config. Replaces the Gemini review workflow (#145) — a GitHub App
+# needs no workflow, no API key and no OIDC, so 363 lines of scaffolding and
+# four secrets go away with it.
+#
+# The project's review standards live in REVIEW_GUIDELINES.md rather than in
+# this file: they are prose, they change with the architecture, and they were
+# already written. `knowledge_base.code_guidelines` points here at them.
+#
+# Schema: https://storage.googleapis.com/coderabbit_public_assets/schema.v2.json
+language: en-US
+
+reviews:
+  # quiet, not the default chill: CI already runs ruff, ruff format, mypy and
+  # the test suite, and the guidelines ask reviewers not to repeat them. What is
+  # wanted here is the small number of things a human would catch.
+  profile: quiet
+  # Do not gate merges on the review. It is advisory — the smoke gate in
+  # deploy.yml is what blocks a bad revision, and a review that can block is a
+  # review that stalls on a false positive.
+  request_changes_workflow: false
+  high_level_summary: true
+  # No filler. The guidelines are explicit about not padding a review.
+  poem: false
+  review_status: false
+  collapse_walkthrough: true
+  auto_review:
+    enabled: true
+    # Drafts are unfinished by definition; reviewing them trains people to
+    # ignore the reviewer.
+    drafts: false
+
+  path_filters:
+    - "!**/*.lock"
+    - "!uv.lock"
+    - "!**/.terraform.lock.hcl"
+    - "!tests/**/snapshots/**"
+
+  path_instructions:
+    - path: "deploy/terraform/**"
+      instructions: >-
+        Infrastructure is declared here and applied by the pipeline; nothing is
+        created by hand. Flag anything that would make `terraform apply`
+        destructive — in particular a change to a resource's address, count or
+        for_each without a matching `moved` block, which silently becomes a
+        destroy-and-recreate of live infrastructure. The container-apps module
+        is instantiated twice (prod, and a test deployment that attaches to
+        prod's shared environment), so a change there lands on both.
+    - path: ".github/workflows/**"
+      instructions: >-
+        Two failure modes have each cost a release here, so weigh them heavily.
+        First, green-and-inert: a job whose steps are all skipped succeeds, so a
+        conditional step that guards the only real work will report success
+        while doing nothing. Second, a guard that cannot fire: values captured
+        with `$(terraform output ...)` are not empty when the command fails —
+        the setup-terraform wrapper writes annotations to stdout — so any
+        `[ -z "$x" ]` check downstream is dead unless `terraform_wrapper: false`
+        is set. Also flag reading an output added in the same change: it does
+        not exist in state until that root applies again.
+    - path: "tests/smoke/**"
+      instructions: >-
+        These run against a deployed instance, never in-process. They must stay
+        read-only — no writing a memory, no minting a credential — and they must
+        not import polymnemo, since the job installs only the HTTP
+        dependencies. Flag anything that would make a check pass without
+        asserting: a skip on missing configuration reaching CI, or a poll whose
+        condition is satisfied by data no assertion looks at.
+    - path: "src/polymnemo/logging.py"
+      instructions: >-
+        This module must not import auth; the identity resolver is injected by
+        the composition root. Logging must never break the thing it logs, and
+        must record field names and error classes only — never payloads or
+        exception messages, which can carry caller data.
+
+knowledge_base:
+  code_guidelines:
+    enabled: true
+    filePatterns:
+      - "REVIEW_GUIDELINES.md"
+      - "CLAUDE.md"
