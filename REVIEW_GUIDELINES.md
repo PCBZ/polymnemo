@@ -3,7 +3,7 @@
 **polymnemo** — a provider-agnostic, cross-LLM shared long-term memory exposed as an **MCP server**.
 
 - **Stack**: Python 3.11+, FastMCP (Streamable HTTP at `/mcp`), fastembed (local ONNX embeddings), pydantic-settings. Postgres + pgvector (Neon) is the production store; an in-memory store backs local dev/tests.
-- **Deploy**: stateless container on Azure Container Apps (scale-to-zero); Cloud Run is a backup target. All state in Neon.
+- **Deploy**: stateless container on Azure Container Apps (scale-to-zero); Cloud Run is a backup target. Durable state is split: memory rows and vectors in Neon, media blobs in Cloudflare R2 (`blob=S3BlobStore` in production).
 - **Principles**: plain text is the single source of truth; **zero external / generative-LLM calls** (embeddings run locally, deterministically); three pluggable layers — **Auth / Store / Retriever** — assembled in `context.build_context()`.
 
 ## Architecture conventions

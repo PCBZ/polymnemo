@@ -35,13 +35,16 @@ reviews:
     - "!**/.terraform.lock.hcl"
     - "!tests/**/snapshots/**"
 
+  # No backticks anywhere in `instructions` below: CodeRabbit's KB prohibits
+  # them and the failure is an agent error at review time, not a config error.
+  # The JSON schema does not catch it — these values passed validation.
   path_instructions:
     - path: "deploy/terraform/**"
       instructions: >-
         Infrastructure is declared here and applied by the pipeline; nothing is
-        created by hand. Flag anything that would make `terraform apply`
+        created by hand. Flag anything that would make 'terraform apply'
         destructive — in particular a change to a resource's address, count or
-        for_each without a matching `moved` block, which silently becomes a
+        for_each without a matching 'moved' block, which silently becomes a
         destroy-and-recreate of live infrastructure. The container-apps module
         is instantiated twice (prod, and a test deployment that attaches to
         prod's shared environment), so a change there lands on both.
@@ -51,9 +54,9 @@ reviews:
         First, green-and-inert: a job whose steps are all skipped succeeds, so a
         conditional step that guards the only real work will report success
         while doing nothing. Second, a guard that cannot fire: values captured
-        with `$(terraform output ...)` are not empty when the command fails —
+        with '$(terraform output ...)' are not empty when the command fails —
         the setup-terraform wrapper writes annotations to stdout — so any
-        `[ -z "$x" ]` check downstream is dead unless `terraform_wrapper: false`
+        '[ -z "$x" ]' check downstream is dead unless 'terraform_wrapper: false'
         is set. Also flag reading an output added in the same change: it does
         not exist in state until that root applies again.
     - path: "tests/smoke/**"
