@@ -12,6 +12,7 @@ name: deploy (azure)
 # Job graph (GitHub renders this live in the run's "graph" view):
 #
 #   neon --> schema --+--> test ------> azure-test --> smoke --> azure --> registry
+#   build ------------------------------> scan-image  (report only, gates nothing)
 #                     '--> azure          ^                      ^
 #   r2 -------------------> azure         |                      |
 #   r2-test ------------------------------'                      |
@@ -187,6 +188,23 @@ jobs:
           tags: ${{ env.IMAGE_TAGS }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+  # Known vulnerabilities in the shipped image, which ruff/mypy/pytest cannot
+  # see. Nothing needs it, so it gates nothing. Report only.
+  scan-image:
+    name: scan image (report only)
+    needs: [build]
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          scan-type: image
+          image-ref: ${{ needs.build.outputs.image }}
+          format: table
+          severity: CRITICAL,HIGH
+          ignore-unfixed: true
+          exit-code: "0"
 
   # The test app's own media bucket, so a blob written against test never lands
   # beside production media. Parallel with everything else; nothing depends on
