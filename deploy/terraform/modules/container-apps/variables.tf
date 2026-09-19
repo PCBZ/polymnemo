@@ -102,15 +102,17 @@ variable "blob_secret_access_key" {
   description = "R2 S3 secret access key, injected (as a secret) into POLYMNEMO_BLOB_SECRET_ACCESS_KEY."
 }
 
+# Sized from measurement: CPU p95 is 0.218 vCPU, memory peaks at 135 MB.
+# https://github.com/PCBZ/polymnemo/wiki/Performance#container-cost--idle-time-not-compute
 variable "cpu" {
   type        = number
-  default     = 1.0
-  description = "vCPU per replica. Container Apps fixes cpu:memory at 1:2 (1.0 -> 2Gi)."
+  default     = 0.5
+  description = "vCPU per replica. Container Apps fixes cpu:memory at 1:2 (0.5 -> 1Gi)."
 }
 
 variable "memory" {
   type        = string
-  default     = "2Gi"
+  default     = "1Gi"
   description = "Memory per replica; must match the cpu:memory 1:2 ratio."
 }
 
@@ -118,6 +120,15 @@ variable "min_replicas" {
   type        = number
   default     = 0
   description = "0 = scale to zero when idle."
+}
+
+# Billed time, and the largest cost lever here. Crawlers probe a median 38s
+# apart, so 300s never sleeps; 60s cuts active time 20.4h/day -> 7.1h.
+# https://github.com/PCBZ/polymnemo/wiki/Performance#container-cost--idle-time-not-compute
+variable "cooldown_seconds" {
+  type        = number
+  default     = 60
+  description = "Seconds a replica stays warm after its last request. Billed time."
 }
 
 variable "max_replicas" {
