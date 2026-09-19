@@ -79,7 +79,9 @@ jobs:
       # while adding untested code — 30 new uncovered lines move 84.8% by a
       # third of a point. The step summary stays: it carries the pass/fail
       # counts, which Codecov does not, and it keeps working if Codecov is down.
-      - uses: codecov/codecov-action@v5
+      # Pinned to a commit, not a tag: a tag can be retargeted, and this step
+      # is handed CODECOV_TOKEN. Bump deliberately, checking the release notes.
+      - uses: codecov/codecov-action@303a32d7a59b442fa8d48b6a1cc6825c09c847a5 # v7.1.1
         if: always()
         with:
           files: coverage.xml
