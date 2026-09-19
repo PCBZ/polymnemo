@@ -1,6 +1,7 @@
 # polymnemo
 
 [![CI](https://github.com/PCBZ/polymnemo/actions/workflows/ci.yml/badge.svg)](https://github.com/PCBZ/polymnemo/actions/workflows/ci.yml)
+[![codecov](https://codecov.io/gh/PCBZ/polymnemo/branch/main/graph/badge.svg)](https://codecov.io/gh/PCBZ/polymnemo)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
 ![Python](https://img.shields.io/badge/Python_3.11%2B-3776AB?logo=python&logoColor=white)

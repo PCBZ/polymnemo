@@ -52,7 +52,7 @@ jobs:
       - name: Apply schema
         run: psql "$TEST_DATABASE_URL" -f scripts/schema.sql
       - name: Run tests
-        run: pytest --cov-report=json --junitxml=pytest.xml
+        run: pytest --cov-report=json --cov-report=xml --junitxml=pytest.xml
       - name: Test + coverage summary
         if: always() # summarize even when tests fail
         run: |
@@ -73,3 +73,15 @@ jobs:
           print("|---|---|---|---|---|")
           print(f"| {passed} | {failed} | {errors} | {skipped} | {cov:.1f}% |")
           PY
+
+      # Codecov adds what the summary above cannot: coverage of the lines this
+      # PR changed, reported on the PR itself. A total is easy to keep high
+      # while adding untested code — 30 new uncovered lines move 84.8% by a
+      # third of a point. The step summary stays: it carries the pass/fail
+      # counts, which Codecov does not, and it keeps working if Codecov is down.
+      - uses: codecov/codecov-action@v5
+        if: always()
+        with:
+          files: coverage.xml
+          token: ${{ secrets.CODECOV_TOKEN }}
+          fail_ci_if_error: false
