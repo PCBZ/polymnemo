@@ -87,3 +87,29 @@ jobs:
           files: coverage.xml
           token: ${{ secrets.CODECOV_TOKEN }}
           fail_ci_if_error: false
+
+  # Misconfiguration in Terraform and the Dockerfile, reported to the Security
+  # tab. Never fails: the findings predate this job, and a scan that is red on
+  # arrival gets ignored.
+  security:
+    name: security scan
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
+    steps:
+      - uses: actions/checkout@v4
+      - name: Scan IaC and Dockerfile
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          scan-type: config
+          scan-ref: .
+          format: sarif
+          output: trivy-config.sarif
+          exit-code: "0"
+      - uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: trivy-config.sarif
+          # Distinct category per scan: uploads sharing one overwrite each
+          # other's alerts instead of coexisting.
+          category: trivy-config
