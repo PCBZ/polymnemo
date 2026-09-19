@@ -1,0 +1,23 @@
+# Reporting, not gating — the same stance pyproject.toml takes on coverage
+# ("this reports, it doesn't block"). A coverage gate on a project with one
+# contributor mostly blocks that contributor.
+coverage:
+  status:
+    project:
+      default:
+        target: auto        # compare against the parent commit, not a fixed bar
+        threshold: 1%       # a 1-point dip is noise, not a regression
+        informational: true # never fails the PR
+    patch:
+      default:
+        target: 80%         # new code should carry tests
+        informational: true # ...but say so rather than block
+
+comment:
+  layout: "condensed_header, diff, files"
+  require_changes: true     # stay silent when coverage did not move
+
+ignore:
+  - "tests/**"
+  - "scripts/**"
+  - "deploy/**"
