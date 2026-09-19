@@ -11,10 +11,15 @@ FROM python:3.11-slim
 # missing POLYMNEMO_DATABASE_URL fails fast instead of silently losing memories.
 # The embedding model is NOT pinned here — it comes from the app config
 # (settings.embed_model), the single source of truth, and is baked in below.
+# Both caches are pinned off their defaults onto one stable, ownable path:
+# fastembed otherwise uses /tmp, which a runtime tmpfs can shadow, discarding
+# the baked model with it.
 ENV PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1 \
     POLYMNEMO_HOST=0.0.0.0 \
-    POLYMNEMO_REQUIRE_DATABASE=true
+    POLYMNEMO_REQUIRE_DATABASE=true \
+    FASTEMBED_CACHE_PATH=/opt/model-cache/fastembed \
+    HF_HOME=/opt/model-cache/huggingface
 
 WORKDIR /app
 
@@ -24,6 +29,13 @@ WORKDIR /app
 COPY pyproject.toml README.md LICENSE ./
 COPY src ./src
 RUN pip install --no-cache-dir "."
+
+# Drop root before baking, so the cache is written by the uid that later reads
+# it. Nothing in the app writes to disk, so read-only ownership is enough.
+RUN useradd --create-home --uid 10001 app \
+    && mkdir -p /opt/model-cache \
+    && chown app:app /opt/model-cache
+USER app
 
 # Bake the embedding model AND its tokenizer (used for token-aware chunking)
 # into the image so cold starts don't download them (first request still
