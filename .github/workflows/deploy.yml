@@ -196,15 +196,23 @@ jobs:
     needs: [build]
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    permissions:
+      contents: read
+      security-events: write
     steps:
       - uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
           scan-type: image
           image-ref: ${{ needs.build.outputs.image }}
-          format: table
+          format: sarif
+          output: trivy-image.sarif
           severity: CRITICAL,HIGH
           ignore-unfixed: true
           exit-code: "0"
+      - uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: trivy-image.sarif
+          category: trivy-image
 
   # The test app's own media bucket, so a blob written against test never lands
   # beside production media. Parallel with everything else; nothing depends on
