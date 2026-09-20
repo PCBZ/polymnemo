@@ -66,6 +66,8 @@ env:
   # bearer-only auth — so this is safe before the OAuth app is registered.
   TF_VAR_oauth_client_id: ${{ secrets.POLYMNEMO_OAUTH_CLIENT_ID }}
   TF_VAR_oauth_client_secret: ${{ secrets.POLYMNEMO_OAUTH_CLIENT_SECRET }}
+  TF_VAR_google_client_id: ${{ secrets.POLYMNEMO_GOOGLE_CLIENT_ID }}
+  TF_VAR_google_client_secret: ${{ secrets.POLYMNEMO_GOOGLE_CLIENT_SECRET }}
   # A variable, not a secret: these are public callback URLs, and being able to
   # read them back is what lets an operator confirm what's actually allowed.
   TF_VAR_oauth_allowed_redirect_uris: ${{ vars.POLYMNEMO_OAUTH_ALLOWED_REDIRECT_URIS }}

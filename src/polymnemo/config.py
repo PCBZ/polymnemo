@@ -182,6 +182,11 @@ class Settings(BaseSettings):
     # localhost-only default, never replacing it, so a bad value can't widen the
     # floor. Needed for hosted MCP clients, which don't use a loopback callback.
     oauth_allowed_redirect_uris: str = ""
+    # Google sign-in for the token page (#153). A Google login is a SEPARATE
+    # identity from a GitHub one, never merged. Only the browser flow uses
+    # these; MCP clients still authorise through GitHub or a bearer token.
+    google_client_id: str = ""
+    google_client_secret: str = ""
     # Per-user keys as "key1:alice,key2:bob" (env POLYMNEMO_API_KEYS).
     api_keys: str = ""
 
