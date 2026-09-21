@@ -7,6 +7,9 @@ that quietly merged them would hand one account's memory to the other.
 
 from __future__ import annotations
 
+import json
+import time
+
 import pytest
 
 from polymnemo import web
@@ -99,3 +102,62 @@ class TestChooser:
 def _signin_html() -> str:
     response = web._signin_page(providers.enabled(), "https://example.test")
     return response.body.decode()
+
+
+class TestDisplayLabelIsNotAnIdentity:
+    """The token page shows something recognisable, but `sub` stays the key.
+    An email can be reassigned; keying on one would hand the next holder the
+    previous owner's memory."""
+
+    def test_the_label_does_not_become_the_user_id(self):
+        cookie = web._new_session("google:12345", "someone@example.com (Google)")
+        request = _FakeRequest({web.SESSION_COOKIE: cookie})
+        assert web._session_user(request) == "google:12345"
+        assert web._session_display(request) == "someone@example.com (Google)"
+
+    def test_editing_the_label_invalidates_the_session(self):
+        """Otherwise a label is a free-text field inside a trusted cookie."""
+        cookie = web._new_session("google:12345", "me@example.com")
+        forged = cookie.replace("me@example.com", "admin@example.com")
+        assert web._session_user(_FakeRequest({web.SESSION_COOKIE: forged})) is None
+
+    def test_a_provider_without_a_label_falls_back_to_the_id(self):
+        """A userinfo response missing the field must not render an empty page
+        header — the account still has to be named."""
+        cookie = web._new_session("github:7")
+        assert web._session_display(_FakeRequest({web.SESSION_COOKIE: cookie})) == (
+            "github:7"
+        )
+
+    def test_an_expired_session_yields_no_label(self):
+        expired = web._sign(
+            json.dumps(
+                {
+                    "sub": "google:1",
+                    "name": "me@example.com",
+                    "exp": int(time.time()) - 1,
+                }
+            )
+        )
+        assert web._session_display(_FakeRequest({web.SESSION_COOKIE: expired})) is None
+
+
+class TestTheLabelReachesThePage:
+    def test_the_page_names_the_account_and_provider(self):
+        body = web._tokens_page(
+            [], "someone@example.com (Google)", "csrf", "https://e.test"
+        ).body.decode()
+        assert "someone@example.com (Google)" in body
+
+    def test_the_label_is_escaped(self):
+        """It comes from the provider, so the page must not trust its shape."""
+        body = web._tokens_page(
+            [], "<script>x</script> (Google)", "csrf", "https://e.test"
+        ).body.decode()
+        assert "<script>x</script>" not in body
+        assert "&lt;script&gt;" in body
+
+
+class _FakeRequest:
+    def __init__(self, cookies: dict[str, str]) -> None:
+        self.cookies = cookies

@@ -24,6 +24,11 @@ class IdentityProvider:
     # email: addresses change hands, and the next holder would inherit the
     # previous one's memory.
     subject_field: str
+    # Something the account holder recognises, shown on the token page so two
+    # accounts are told apart by sight. Display only -- never the identity key,
+    # because an email can be reassigned and the next holder would inherit the
+    # previous one's memory.
+    display_field: str
     # Settings attributes rather than values, so a test can set credentials
     # after this table is built.
     client_id_setting: str
@@ -55,6 +60,7 @@ GITHUB = IdentityProvider(
     userinfo_url="https://api.github.com/user",
     scope="read:user",
     subject_field="id",
+    display_field="login",
     client_id_setting="oauth_client_id",
     client_secret_setting="oauth_client_secret",
     userinfo_headers={"Accept": "application/vnd.github+json"},
@@ -68,6 +74,7 @@ GOOGLE = IdentityProvider(
     userinfo_url="https://openidconnect.googleapis.com/v1/userinfo",
     scope="openid email profile",
     subject_field="sub",
+    display_field="email",
     client_id_setting="google_client_id",
     client_secret_setting="google_client_secret",
 )

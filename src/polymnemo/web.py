@@ -88,9 +88,9 @@ def _unsign(value: str) -> str | None:
     return payload
 
 
-def _session_user(request: Request) -> str | None:
-    """The signed-in ``user_id``, or None. Expiry is inside the signed payload,
-    so a stale cookie can't be replayed by resetting the browser's clock."""
+def _session_data(request: Request) -> dict | None:
+    """The verified, unexpired session payload, or None. One place, because
+    three readers each re-checking the signature would eventually disagree."""
     raw = request.cookies.get(SESSION_COOKIE)
     if not raw:
         return None
@@ -101,10 +101,26 @@ def _session_user(request: Request) -> str | None:
         data = json.loads(payload)
     except ValueError:
         return None
-    if data.get("exp", 0) < time.time():
+    if not isinstance(data, dict) or data.get("exp", 0) < time.time():
         return None
-    user_id = data.get("sub")
-    return user_id if isinstance(user_id, str) else None
+    return data
+
+
+def _session_str(request: Request, field: str) -> str | None:
+    data = _session_data(request)
+    value = data.get(field) if data else None
+    return value if isinstance(value, str) else None
+
+
+def _session_user(request: Request) -> str | None:
+    """The signed-in ``user_id``, or None. Expiry is inside the signed payload,
+    so a stale cookie can't be replayed by resetting the browser's clock."""
+    return _session_str(request, "sub")
+
+
+def _session_display(request: Request) -> str | None:
+    """What to show the user. Cosmetic — never an identity (see _new_session)."""
+    return _session_str(request, "name")
 
 
 def _base_url(request: Request) -> str:
@@ -114,12 +130,18 @@ def _base_url(request: Request) -> str:
     return str(request.base_url).rstrip("/")
 
 
-def _new_session(user_id: str) -> str:
-    """A signed session carrying its own expiry and a CSRF token."""
+def _new_session(user_id: str, display: str | None = None) -> str:
+    """A signed session carrying its own expiry, a CSRF token, and a label.
+
+    The label is cosmetic. `sub` stays the only identity: an email can be
+    reassigned, so keying on one would hand the next holder the previous
+    owner's memory.
+    """
     return _sign(
         json.dumps(
             {
                 "sub": user_id,
+                "name": display or user_id,
                 "exp": int(time.time()) + SESSION_MAX_AGE,
                 "csrf": secrets.token_urlsafe(16),
             },
@@ -129,14 +151,7 @@ def _new_session(user_id: str) -> str:
 
 
 def _session_csrf(request: Request) -> str | None:
-    raw = request.cookies.get(SESSION_COOKIE)
-    payload = _unsign(raw) if raw else None
-    if payload is None:
-        return None
-    try:
-        return json.loads(payload).get("csrf")
-    except ValueError:
-        return None
+    return _session_str(request, "csrf")
 
 
 def _set_cookie(response: Response, name: str, value: str, max_age: int) -> None:
@@ -206,7 +221,7 @@ def _signin_page(available, base: str) -> HTMLResponse:
 
 def _tokens_page(
     tokens: list[ApiToken],
-    user_id: str,
+    account: str,
     csrf: str,
     base: str,
     fresh: str | None = None,
@@ -228,7 +243,7 @@ def _tokens_page(
 
     return HTMLResponse(
         _template("tokens.html").substitute(
-            user_id=html.escape(user_id),
+            account=html.escape(account),
             csrf=html.escape(csrf),
             base=base,
             rows=rows,
@@ -268,7 +283,12 @@ def register(mcp, store: ApiTokenStore | None) -> None:
         if user_id is None:
             return RedirectResponse(f"{base}/tokens/login", status_code=302)
         tokens = await _load_tokens(store, user_id)
-        return _tokens_page(tokens, user_id, _session_csrf(request) or "", base)
+        return _tokens_page(
+            tokens,
+            _session_display(request) or user_id,
+            _session_csrf(request) or "",
+            base,
+        )
 
     @mcp.custom_route("/tokens/login", methods=["GET"])
     async def tokens_login(request: Request) -> Response:
@@ -362,7 +382,9 @@ def register(mcp, store: ApiTokenStore | None) -> None:
                         **provider.userinfo_headers,
                     },
                 )
-                sub = user_resp.json().get(provider.subject_field)
+                account = user_resp.json()
+                sub = account.get(provider.subject_field)
+                display = account.get(provider.display_field)
         except (ValueError, httpx.HTTPError) as exc:  # ValueError: JSONDecodeError
             # The message too: it carries the status, not the OAuth code.
             logger.warning(
@@ -376,9 +398,15 @@ def register(mcp, store: ApiTokenStore | None) -> None:
             return _fail_signin("Sign-in failed.")
 
         user_id = f"{provider.subject_prefix}{sub}"
+        # The label is whatever the provider calls the account; the id is what
+        # everything is keyed on. Logged by id so the audit trail stays stable
+        # when someone renames their account or changes their email.
+        label = f"{display} ({provider.label})" if display else None
         audit.info("token page: signed in as %s", user_id)
         response = RedirectResponse(f"{base}/tokens", status_code=302)
-        _set_cookie(response, SESSION_COOKIE, _new_session(user_id), SESSION_MAX_AGE)
+        _set_cookie(
+            response, SESSION_COOKIE, _new_session(user_id, label), SESSION_MAX_AGE
+        )
         response.delete_cookie(STATE_COOKIE, path="/tokens")
         return response
 
