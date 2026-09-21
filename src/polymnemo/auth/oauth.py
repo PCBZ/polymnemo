@@ -18,6 +18,7 @@ from fastmcp.server.dependencies import AccessToken, get_access_token
 from key_value.aio.stores.postgresql import PostgreSQLStore
 
 from .base import AuthError
+from .providers import GITHUB
 from .tokens import TOKEN_PREFIX, ApiTokenStore
 
 # `polymnemo.auth.*` — inherits the level configure_logging pins there.
@@ -26,8 +27,9 @@ logger = logging.getLogger(__name__)
 # Created by scripts/schema.sql; shape must match what py-key-value-aio expects.
 OAUTH_KV_TABLE = "oauth_kv"
 
-# Shared with web.py: renaming one side alone would silently split identities.
-GITHUB_SUBJECT_PREFIX = "github:"
+# Taken from the registry, not restated: a GitHub login through the browser
+# flow and through MCP OAuth must land on the same user_id.
+GITHUB_SUBJECT_PREFIX = GITHUB.subject_prefix
 # Marks a token that came from the static key table rather than OAuth.
 BEARER_CLIENT_ID = "static-bearer"
 
@@ -105,6 +107,8 @@ class TokenSubjectAuth:
             raise AuthError("Not authenticated")
         # Bearer subjects are already polymnemo user ids; only OAuth subjects
         # need namespacing, so a GitHub `sub` can't collide with a chosen name.
+        # MCP OAuth is GitHub-only — Google users reach MCP with a token minted
+        # on the token page, which arrives by the bearer branch above.
         if token.client_id == BEARER_CLIENT_ID:
             return token.subject
         return f"{GITHUB_SUBJECT_PREFIX}{token.subject}"

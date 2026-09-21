@@ -12,7 +12,8 @@ belongs to a different decision, not to feature creep.
 Authentication here is its own thing. The MCP OAuth flow serves MCP clients —
 dynamic registration, PKCE, a loopback callback — and issues MCP access tokens,
 not browser sessions. These routes run a plain server-side authorization-code
-flow against the same GitHub app and end in a signed cookie.
+flow against whichever identity provider the user picks, ending in a signed
+cookie. Each provider is a separate account -- see auth/providers.py.
 """
 
 from __future__ import annotations
@@ -40,7 +41,7 @@ from starlette.responses import (
     Response,
 )
 
-from .auth.oauth import GITHUB_SUBJECT_PREFIX
+from .auth import providers
 from .auth.tokens import ApiToken, ApiTokenStore
 from .config import settings
 from .logging import AUDIT_LOGGER
@@ -53,9 +54,6 @@ SESSION_COOKIE = "polymnemo_session"
 SESSION_MAX_AGE = 8 * 3600
 # The OAuth `state`, in a cookie so any replica can answer the callback.
 STATE_COOKIE = "polymnemo_oauth_state"
-GITHUB_AUTHORIZE = "https://github.com/login/oauth/authorize"
-GITHUB_TOKEN = "https://github.com/login/oauth/access_token"
-GITHUB_USER = "https://api.github.com/user"
 
 
 def _secret() -> bytes:
@@ -90,9 +88,9 @@ def _unsign(value: str) -> str | None:
     return payload
 
 
-def _session_user(request: Request) -> str | None:
-    """The signed-in ``user_id``, or None. Expiry is inside the signed payload,
-    so a stale cookie can't be replayed by resetting the browser's clock."""
+def _session_data(request: Request) -> dict | None:
+    """The verified, unexpired session payload, or None. One place, because
+    three readers each re-checking the signature would eventually disagree."""
     raw = request.cookies.get(SESSION_COOKIE)
     if not raw:
         return None
@@ -103,10 +101,26 @@ def _session_user(request: Request) -> str | None:
         data = json.loads(payload)
     except ValueError:
         return None
-    if data.get("exp", 0) < time.time():
+    if not isinstance(data, dict) or data.get("exp", 0) < time.time():
         return None
-    user_id = data.get("sub")
-    return user_id if isinstance(user_id, str) else None
+    return data
+
+
+def _session_str(request: Request, field: str) -> str | None:
+    data = _session_data(request)
+    value = data.get(field) if data else None
+    return value if isinstance(value, str) else None
+
+
+def _session_user(request: Request) -> str | None:
+    """The signed-in ``user_id``, or None. Expiry is inside the signed payload,
+    so a stale cookie can't be replayed by resetting the browser's clock."""
+    return _session_str(request, "sub")
+
+
+def _session_display(request: Request) -> str | None:
+    """What to show the user. Cosmetic — never an identity (see _new_session)."""
+    return _session_str(request, "name")
 
 
 def _base_url(request: Request) -> str:
@@ -116,12 +130,18 @@ def _base_url(request: Request) -> str:
     return str(request.base_url).rstrip("/")
 
 
-def _new_session(user_id: str) -> str:
-    """A signed session carrying its own expiry and a CSRF token."""
+def _new_session(user_id: str, display: str | None = None) -> str:
+    """A signed session carrying its own expiry, a CSRF token, and a label.
+
+    The label is cosmetic. `sub` stays the only identity: an email can be
+    reassigned, so keying on one would hand the next holder the previous
+    owner's memory.
+    """
     return _sign(
         json.dumps(
             {
                 "sub": user_id,
+                "name": display or user_id,
                 "exp": int(time.time()) + SESSION_MAX_AGE,
                 "csrf": secrets.token_urlsafe(16),
             },
@@ -131,14 +151,7 @@ def _new_session(user_id: str) -> str:
 
 
 def _session_csrf(request: Request) -> str | None:
-    raw = request.cookies.get(SESSION_COOKIE)
-    payload = _unsign(raw) if raw else None
-    if payload is None:
-        return None
-    try:
-        return json.loads(payload).get("csrf")
-    except ValueError:
-        return None
+    return _session_str(request, "csrf")
 
 
 def _set_cookie(response: Response, name: str, value: str, max_age: int) -> None:
@@ -196,9 +209,19 @@ async def _load_tokens(store: ApiTokenStore | None, user_id: str) -> list[ApiTok
     return await asyncio.to_thread(store.list_for_user, user_id)
 
 
+def _signin_page(available, base: str) -> HTMLResponse:
+    """The chooser. Only reached when more than one provider is configured."""
+    button = _template("signin_button.html")
+    buttons = "".join(
+        button.substitute(base=base, key=p.key, label=html.escape(p.label))
+        for p in available
+    )
+    return HTMLResponse(_template("signin.html").substitute(base=base, buttons=buttons))
+
+
 def _tokens_page(
     tokens: list[ApiToken],
-    user_id: str,
+    account: str,
     csrf: str,
     base: str,
     fresh: str | None = None,
@@ -220,7 +243,7 @@ def _tokens_page(
 
     return HTMLResponse(
         _template("tokens.html").substitute(
-            user_id=html.escape(user_id),
+            account=html.escape(account),
             csrf=html.escape(csrf),
             base=base,
             rows=rows,
@@ -260,27 +283,53 @@ def register(mcp, store: ApiTokenStore | None) -> None:
         if user_id is None:
             return RedirectResponse(f"{base}/tokens/login", status_code=302)
         tokens = await _load_tokens(store, user_id)
-        return _tokens_page(tokens, user_id, _session_csrf(request) or "", base)
+        return _tokens_page(
+            tokens,
+            _session_display(request) or user_id,
+            _session_csrf(request) or "",
+            base,
+        )
 
     @mcp.custom_route("/tokens/login", methods=["GET"])
     async def tokens_login(request: Request) -> Response:
         base = _base_url(request)
+        available = providers.enabled()
+        if not available:
+            return _fail("Sign-in is not configured on this deployment.")
+        # No chooser for a single provider: a one-button page is just a stop.
+        if len(available) == 1:
+            return RedirectResponse(
+                f"{base}/tokens/login/{available[0].key}", status_code=302
+            )
+        return _signin_page(available, base)
+
+    @mcp.custom_route("/tokens/login/{provider}", methods=["GET"])
+    async def tokens_login_provider(request: Request) -> Response:
+        base = _base_url(request)
+        # `get` returns None for a provider without credentials, so a crafted
+        # URL cannot start a flow the operator never enabled.
+        provider = providers.get(request.path_params["provider"])
+        if provider is None:
+            return _fail("Unknown sign-in method.")
         state = secrets.token_urlsafe(16)
         url = (
-            GITHUB_AUTHORIZE
+            provider.authorize_url
             + "?"
             + urlencode(
                 {
-                    "client_id": settings.oauth_client_id,
+                    "client_id": provider.client_id,
                     "redirect_uri": f"{base}/tokens/callback",
-                    "scope": "read:user",
+                    "scope": provider.scope,
                     "state": state,
+                    # Optional for GitHub, required by Google.
+                    "response_type": "code",
                 }
             )
         )
         response = RedirectResponse(url, status_code=302)
-        # Signed so the callback can tell its own state from an attacker's.
-        _set_cookie(response, STATE_COOKIE, _sign(state), 600)
+        # Signed so the callback can tell its own state from an attacker's, and
+        # carrying the provider so one callback URL can serve every flow.
+        _set_cookie(response, STATE_COOKIE, _sign(f"{provider.key}|{state}"), 600)
         return response
 
     @mcp.custom_route("/tokens/callback", methods=["GET"])
@@ -289,8 +338,16 @@ def register(mcp, store: ApiTokenStore | None) -> None:
         code = request.query_params.get("code")
         state = request.query_params.get("state")
         cookie_state = request.cookies.get(STATE_COOKIE)
-        expected = _unsign(cookie_state) if cookie_state else None
-        if not code or not state or expected is None or state != expected:
+        signed = _unsign(cookie_state) if cookie_state else None
+        provider_key, _, expected = (signed or "").partition("|")
+        provider = providers.get(provider_key)
+        if (
+            not code
+            or not state
+            or not expected
+            or not secrets.compare_digest(state, expected)
+            or provider is None
+        ):
             # Else an attacker completes the flow with their own code.
             return _fail_signin(
                 "Sign-in failed: invalid or expired request. "
@@ -301,44 +358,54 @@ def register(mcp, store: ApiTokenStore | None) -> None:
         try:
             async with httpx.AsyncClient(timeout=15) as client:
                 token_resp = await client.post(
-                    GITHUB_TOKEN,
+                    provider.token_url,
                     headers={"Accept": "application/json"},
                     data={
-                        "client_id": settings.oauth_client_id,
-                        "client_secret": settings.oauth_client_secret,
+                        "client_id": provider.client_id,
+                        "client_secret": provider.client_secret,
                         "code": code,
                         "redirect_uri": f"{base}/tokens/callback",
+                        # Ignored by GitHub, required by Google.
+                        "grant_type": "authorization_code",
                     },
                 )
                 access = token_resp.json().get("access_token")
                 if not access:
-                    logger.warning("token page: GitHub returned no access token")
+                    logger.warning(
+                        "token page: %s returned no access token", provider.key
+                    )
                     return _fail_signin("Sign-in failed.")
                 user_resp = await client.get(
-                    GITHUB_USER,
+                    provider.userinfo_url,
                     headers={
                         "Authorization": f"Bearer {access}",
-                        "Accept": "application/vnd.github+json",
+                        **provider.userinfo_headers,
                     },
                 )
-                sub = user_resp.json().get("id")
+                account = user_resp.json()
+                sub = account.get(provider.subject_field)
+                display = account.get(provider.display_field)
         except (ValueError, httpx.HTTPError) as exc:  # ValueError: JSONDecodeError
             # The message too: it carries the status, not the OAuth code.
             logger.warning(
-                "token page: GitHub sign-in failed (%s: %s)", type(exc).__name__, exc
+                "token page: %s sign-in failed (%s: %s)",
+                provider.key,
+                type(exc).__name__,
+                exc,
             )
             return _fail_signin("Sign-in failed.")
         if sub is None:
             return _fail_signin("Sign-in failed.")
 
-        audit.info("token page: signed in as %s%s", GITHUB_SUBJECT_PREFIX, sub)
-        # Same user_id TokenSubjectAuth resolves for this account.
+        user_id = f"{provider.subject_prefix}{sub}"
+        # The label is whatever the provider calls the account; the id is what
+        # everything is keyed on. Logged by id so the audit trail stays stable
+        # when someone renames their account or changes their email.
+        label = f"{display} ({provider.label})" if display else None
+        audit.info("token page: signed in as %s", user_id)
         response = RedirectResponse(f"{base}/tokens", status_code=302)
         _set_cookie(
-            response,
-            SESSION_COOKIE,
-            _new_session(f"{GITHUB_SUBJECT_PREFIX}{sub}"),
-            SESSION_MAX_AGE,
+            response, SESSION_COOKIE, _new_session(user_id, label), SESSION_MAX_AGE
         )
         response.delete_cookie(STATE_COOKIE, path="/tokens")
         return response

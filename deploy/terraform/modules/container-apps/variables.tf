@@ -51,6 +51,20 @@ variable "oauth_client_secret" {
   description = "GitHub OAuth app client secret, injected as POLYMNEMO_OAUTH_CLIENT_SECRET."
 }
 
+# Google sign-in for the token page (#153). Separate identity from GitHub.
+variable "google_client_id" {
+  type        = string
+  default     = ""
+  description = "Google OAuth client id; empty disables Google sign-in."
+}
+
+variable "google_client_secret" {
+  type        = string
+  default     = ""
+  sensitive   = true
+  description = "Google OAuth client secret."
+}
+
 variable "oauth_allowed_redirect_uris" {
   type        = string
   default     = ""

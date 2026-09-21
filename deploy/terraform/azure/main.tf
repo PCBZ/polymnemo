@@ -49,6 +49,8 @@ module "container_apps" {
   oauth_client_id             = var.oauth_client_id
   oauth_client_secret         = var.oauth_client_secret
   oauth_allowed_redirect_uris = var.oauth_allowed_redirect_uris
+  google_client_id            = var.google_client_id
+  google_client_secret        = var.google_client_secret
 
   # Media/blob wiring — always on, from the shared r2/ root.
   blob_backend           = "s3"

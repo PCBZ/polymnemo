@@ -310,7 +310,8 @@ class TestSignInFailureIsDiagnosable:
 
     def _request(self):
         state = "s3cr3t-state"
-        return self._Request(state, web._sign(state))
+        # The state cookie carries the chosen provider since #153.
+        return self._Request(state, web._sign(f"github|{state}"))
 
     def _logged(self, caplog, needle: str) -> str | None:
         """None rather than StopIteration: a renamed message should fail the

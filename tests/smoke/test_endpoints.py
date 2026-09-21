@@ -159,13 +159,28 @@ class TestTokenPages:
         assert r.status_code == 302
         assert r.headers["location"].endswith("/tokens/login")
 
-    def test_login_hands_off_to_github_with_our_own_callback(self, client, base_url):
+    def test_login_offers_every_configured_provider(self, client):
         """A 404 here means OAuth is unconfigured on this deployment, which is
         how the token pages silently disappear."""
         r = client.get("/tokens/login")
-        assert r.status_code == 302, f"OAuth not configured? {r.status_code}"
+        assert r.status_code == 200, f"OAuth not configured? {r.status_code}"
+        assert "Continue with GitHub" in r.text
+        assert "Continue with Google" in r.text, "Google credentials not deployed?"
+
+    @pytest.mark.parametrize(
+        "provider,idp_host",
+        [("github", "github.com"), ("google", "accounts.google.com")],
+    )
+    def test_each_provider_hands_off_with_our_own_callback(
+        self, client, base_url, provider, idp_host
+    ):
+        """The redirect_uri is the half that only breaks in the deployment: it is
+        built from this host, and the IdP rejects it unless it matches what was
+        registered there. Google matches exactly, so a wrong one 400s at login."""
+        r = client.get(f"/tokens/login/{provider}")
+        assert r.status_code == 302, r.status_code
         target = urlparse(r.headers["location"])
-        assert target.netloc == "github.com"
+        assert target.netloc == idp_host
         redirect = parse_qs(target.query).get("redirect_uri", [""])[0]
         assert redirect == f"{base_url}/tokens/callback", redirect
 

@@ -132,6 +132,16 @@ resource "azurerm_container_app" "this" {
     }
   }
 
+  dynamic "secret" {
+    for_each = var.google_client_id == "" ? {} : {
+      "google-client-secret" = var.google_client_secret
+    }
+    content {
+      name  = secret.key
+      value = secret.value
+    }
+  }
+
   # R2 S3 credentials as secrets (only when media is enabled).
   dynamic "secret" {
     for_each = var.blob_backend == "none" ? {} : {
@@ -213,6 +223,25 @@ resource "azurerm_container_app" "this" {
       dynamic "env" {
         for_each = var.oauth_client_id == "" ? {} : {
           POLYMNEMO_OAUTH_CLIENT_SECRET = "oauth-client-secret"
+        }
+        content {
+          name        = env.key
+          secret_name = env.value
+        }
+      }
+
+      dynamic "env" {
+        for_each = var.google_client_id == "" ? {} : {
+          POLYMNEMO_GOOGLE_CLIENT_ID = var.google_client_id
+        }
+        content {
+          name  = env.key
+          value = env.value
+        }
+      }
+      dynamic "env" {
+        for_each = var.google_client_id == "" ? {} : {
+          POLYMNEMO_GOOGLE_CLIENT_SECRET = "google-client-secret"
         }
         content {
           name        = env.key
