@@ -1,6 +1,7 @@
 """Application context — assemble the pluggable layers from config.
 
-One place that decides which Auth / Store / Retriever / Embedder implementations
+One place that decides which Auth / Store / Retriever / Embedder / Guard
+implementations
 are active (a lightweight composition root). Phase 0 wires the dev defaults
 (static auth, in-memory store, stub embedder); later issues swap in the real
 ones (BearerKeyAuth #5, PostgresStore #6, fastembed Embedder #3) without
@@ -18,6 +19,7 @@ from .auth import Auth, BearerKeyAuth, StaticAuth, TokenSubjectAuth
 from .blobstore import BlobStore
 from .config import settings
 from .embedding import Embedder, FastEmbedEmbedder, StubEmbedder
+from .guard import Guard, NoOpGuard
 from .ratelimit import GlobalRateLimiter
 from .retriever import Retriever, VectorRetriever
 from .store import InMemoryStore, Store
@@ -29,6 +31,7 @@ class AppContext:
     store: Store
     embedder: Embedder
     retriever: Retriever
+    guard: Guard
     rate_limiter: GlobalRateLimiter | None
     blob_store: BlobStore | None
 
@@ -39,6 +42,7 @@ class AppContext:
             "store": type(self.store).__name__,
             "embedder": type(self.embedder).__name__,
             "retriever": type(self.retriever).__name__,
+            "guard": type(self.guard).__name__,
             "rate_limiter": type(self.rate_limiter).__name__
             if self.rate_limiter
             else "disabled",
@@ -81,6 +85,11 @@ def _build_auth() -> Auth:
     return BearerKeyAuth(settings.parse_api_keys())
 
 
+def _build_guard() -> Guard:
+    """No scanner is configured yet — the RSP-backed guard arrives in #158."""
+    return NoOpGuard()
+
+
 def _build_rate_limiter() -> GlobalRateLimiter | None:
     if not settings.ratelimit_enabled:
         return None
@@ -109,6 +118,7 @@ def build_context() -> AppContext:
     embedder: Embedder = _build_embedder()
     retriever: Retriever = VectorRetriever(store=store, embedder=embedder)
     auth: Auth = _build_auth()
+    guard: Guard = _build_guard()
     rate_limiter: GlobalRateLimiter | None = _build_rate_limiter()
     blob_store: BlobStore | None = _build_blob_store()
     return AppContext(
@@ -116,6 +126,7 @@ def build_context() -> AppContext:
         store=store,
         embedder=embedder,
         retriever=retriever,
+        guard=guard,
         rate_limiter=rate_limiter,
         blob_store=blob_store,
     )
