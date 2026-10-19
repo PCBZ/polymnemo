@@ -55,12 +55,11 @@ class _SpyEmbedder:
 
 
 def _service(guard: Guard) -> tuple[MemoryService, _SpyEmbedder]:
-    from tests.conftest import FakeBlobStore
-
+    """No blob store: nothing here touches media, and importing the shared fake
+    would mean importing `tests`, which is not a package."""
     base = build_context()
     spy = _SpyEmbedder(base.embedder)
-    ctx = replace(base, guard=guard, embedder=spy, blob_store=FakeBlobStore())
-    return MemoryService(ctx), spy
+    return MemoryService(replace(base, guard=guard, embedder=spy)), spy
 
 
 class TestTheDefaultChangesNothing:
