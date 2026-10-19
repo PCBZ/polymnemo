@@ -14,6 +14,7 @@ from .blobstore import BlobError
 from .chunking import chunk_text, chunk_verbatim
 from .config import settings
 from .context import AppContext
+from .guard import GuardBlocked
 from .models import Memory, new_id
 
 logger = logging.getLogger("polymnemo")
@@ -54,6 +55,27 @@ class MemoryService:
     def __init__(self, ctx: AppContext) -> None:
         self.ctx = ctx
 
+    def _guarded(self, chunks: list[str], origin: str) -> list[str]:
+        """Run the guard over a whole write, returning the chunks to store.
+
+        Nothing here logs or returns `outcome.reasons`. A reason is free text
+        from the scanner and may quote the secret it matched, and RSP's K1
+        counts an audit log as storage — writing it would store the very thing
+        the guard just refused, in a workspace with 30-day retention. The
+        caller is told the verdict; what matched stays with the scanner.
+        """
+        outcome = self.ctx.guard.inspect(chunks)
+        if outcome.blocked:
+            # All-or-nothing: one memory becomes several chunks, and storing
+            # the unblocked ones leaves a silent hole in the middle of the
+            # text. A visible refusal beats a partial write.
+            logger.warning("guard blocked a write (%s)", origin)
+            raise GuardBlocked(
+                "This content was refused by the content guard and was not "
+                "stored. Remove the sensitive value and try again."
+            )
+        return outcome.chunks
+
     def remember(
         self,
         user_id: str,
@@ -71,7 +93,7 @@ class MemoryService:
             raise ValueError("content is empty — provide text to store.")
 
         ns = namespace or settings.default_namespace
-        chunks = chunk_text(content)
+        chunks = self._guarded(chunk_text(content), "remember")
         embeddings = self.ctx.embedder.embed_documents(chunks)
 
         ids: list[str] = []
@@ -193,7 +215,7 @@ class MemoryService:
 
         # Chunk + embed BEFORE touching the store: if embedding fails, the old
         # session is left untouched. The store then swaps old->new atomically.
-        chunks = chunk_verbatim(content)
+        chunks = self._guarded(chunk_verbatim(content), "save_session")
         embeddings = self.ctx.embedder.embed_documents(chunks)
         memories = [
             Memory(
