@@ -78,8 +78,10 @@ target-version = "py311"
 line-length = 88
 # Vendored verbatim from PCBZ/rsp (see plugins/gitleaks/README.md). Formatting
 # it to our settings would make every re-vendor a diff against our edits rather
-# than against upstream, which is how a vendored copy quietly forks.
-extend-exclude = ["plugins/gitleaks"]
+# than against upstream, which is how a vendored copy quietly forks. Each
+# plugin is a self-contained command, so each carries its own strictjson.py --
+# that duplication is the upstream pattern, not an accident.
+extend-exclude = ["plugins/gitleaks", "plugins/**/strictjson.py"]
 
 [tool.ruff.lint]
 # pycodestyle/pyflakes + isort + pyupgrade + bugbear + ruff-native rules.

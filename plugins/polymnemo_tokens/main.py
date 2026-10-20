@@ -19,12 +19,12 @@ import json
 import re
 import sys
 
+import strictjson
+
 # `pmn_` + secrets.token_urlsafe(32), which is 43 urlsafe-base64 characters.
 # The lower bound is loose so a future token length still matches; the prefix
 # is what makes a false positive essentially impossible in prose.
 TOKEN = re.compile(rb"pmn_[A-Za-z0-9_-]{20,}")
-
-SAFE_INTEGER = 2**53 - 1
 
 
 def declare() -> dict:
@@ -56,31 +56,12 @@ def respond(request: dict) -> dict:
     }
 
 
-def _no_repeats(pairs: list[tuple[str, object]]) -> dict:
-    seen: dict = {}
-    for key, value in pairs:
-        if key in seen:
-            raise ValueError(f"repeated key {key!r}")
-        seen[key] = value
-    return seen
-
-
-def _not_json(token: str) -> object:
-    raise ValueError(f"{token} is not a number")
-
-
 def main() -> None:
     # The wire is UTF-8 (M1) whatever locale the host was started in.
     sys.stdin.reconfigure(encoding="utf-8")
     sys.stdout.reconfigure(encoding="utf-8")
     try:
-        raw = sys.stdin.read()
-        if raw.strip(" \t\n\r") != raw.strip():
-            raise ValueError("framed by something other than space, tab, CR or LF")
-        request = json.loads(
-            raw, object_pairs_hook=_no_repeats, parse_constant=_not_json
-        )
-        json.dump(respond(request), sys.stdout)
+        json.dump(respond(strictjson.loads(sys.stdin.read())), sys.stdout)
     except Exception as exc:
         # stderr: a stray line on stdout is indistinguishable from a response (T2).
         print(f"polymnemo-tokens: {exc}", file=sys.stderr)
