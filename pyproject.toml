@@ -76,6 +76,10 @@ show_missing = true
 [tool.ruff]
 target-version = "py311"
 line-length = 88
+# Vendored verbatim from PCBZ/rsp (see plugins/gitleaks/README.md). Formatting
+# it to our settings would make every re-vendor a diff against our edits rather
+# than against upstream, which is how a vendored copy quietly forks.
+extend-exclude = ["plugins/gitleaks"]
 
 [tool.ruff.lint]
 # pycodestyle/pyflakes + isort + pyupgrade + bugbear + ruff-native rules.

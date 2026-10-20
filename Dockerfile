@@ -28,7 +28,27 @@ WORKDIR /app
 # a plain install has everything the deployed server needs.
 COPY pyproject.toml README.md LICENSE ./
 COPY src ./src
-RUN pip install --no-cache-dir "."
+RUN pip install --no-cache-dir ".[rsp]"
+
+# The content scanners (#163). Inert unless POLYMNEMO_RSP_CONFIG names a
+# config: nothing is imported and nothing is spawned, so this costs runtime
+# nothing and ~7 MB of image.
+COPY plugins ./plugins
+
+# gitleaks, pinned and checksummed. Downloaded with python rather than curl,
+# which this base image does not carry -- apt-get for one download would cost
+# more than the binary. Installed as root, before the user switch below, and
+# world-readable so the unprivileged runtime user can execute it.
+ARG GITLEAKS_VERSION=8.30.1
+ARG GITLEAKS_SHA256=551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb
+RUN set -eu; \
+    url="https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"; \
+    python -c "import sys,urllib.request; urllib.request.urlretrieve(sys.argv[1], '/tmp/gl.tgz')" "$url"; \
+    echo "${GITLEAKS_SHA256}  /tmp/gl.tgz" | sha256sum -c -; \
+    tar -xzf /tmp/gl.tgz -C /usr/local/bin gitleaks; \
+    rm /tmp/gl.tgz; \
+    chmod 0755 /usr/local/bin/gitleaks; \
+    gitleaks version
 
 # Drop root before baking, so the cache is written by the uid that later reads
 # it. Nothing in the app writes to disk, so read-only ownership is enough.
