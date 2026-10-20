@@ -15,8 +15,9 @@ from pathlib import Path
 import pytest
 from rsp.runtime import ConfigError
 
+from polymnemo.config import settings
 from polymnemo.context import build_context
-from polymnemo.guard import GuardBlocked, Verdict
+from polymnemo.guard import GuardBlocked, NoOpGuard, Verdict
 from polymnemo.guard.rsp_guard import RSPGuard
 from polymnemo.service import MemoryService
 
@@ -151,3 +152,31 @@ class TestThroughTheService:
         stored = service.get_memory("alice", result["ids"][0])["content"]
         assert MARKER not in stored
         assert "[REDACTED]" in stored
+
+
+class TestTheContextWiresItUp:
+    """Everything above constructs RSPGuard directly. This is the path
+    production takes, and nothing else covers it: a wrong settings attribute or
+    a changed constructor signature would pass every other test here."""
+
+    def test_setting_the_config_selects_the_rsp_guard(self, config, mode, monkeypatch):
+        mode("allow")
+        monkeypatch.setattr(settings, "rsp_config", str(config))
+        ctx = build_context()
+        assert isinstance(ctx.guard, RSPGuard)
+        assert ctx.describe()["guard"] == "RSPGuard"
+
+    def test_an_unset_config_leaves_the_no_op(self, monkeypatch):
+        monkeypatch.setattr(settings, "rsp_config", "")
+        assert isinstance(build_context().guard, NoOpGuard)
+
+    def test_a_broken_config_fails_at_startup_not_at_the_first_write(
+        self, tmp_path, monkeypatch
+    ):
+        """build_context runs on import, so this is a deploy that does not come
+        up rather than a service that serves with a dead scanner."""
+        bad = tmp_path / "rsp.toml"
+        bad.write_text('[[plugins]]\nname = "nope"\ncommand = ["/nonexistent/x"]\n')
+        monkeypatch.setattr(settings, "rsp_config", str(bad))
+        with pytest.raises(ConfigError):
+            build_context()
