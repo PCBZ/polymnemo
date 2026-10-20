@@ -187,6 +187,9 @@ class Settings(BaseSettings):
     # these; MCP clients still authorise through GitHub or a bearer token.
     google_client_id: str = ""
     google_client_secret: str = ""
+    # Path to an RSP config naming the scanner plugins (#158). Empty means the
+    # no-op guard: nothing is scanned, and the rsp package is never imported.
+    rsp_config: str = ""
     # Per-user keys as "key1:alice,key2:bob" (env POLYMNEMO_API_KEYS).
     api_keys: str = ""
 

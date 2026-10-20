@@ -58,6 +58,12 @@ class MemoryService:
     def _guarded(self, chunks: list[str], origin: str) -> list[str]:
         """Run the guard over a whole write, returning the chunks to store.
 
+        Every path that persists caller-supplied text goes through here:
+        `remember`, `save_session`, `update`, and `create_upload`'s description.
+        A path that skips it is a way around the guard -- `update` especially,
+        since storing something harmless and then editing it would otherwise
+        put anything into the store.
+
         Nothing here logs or returns `outcome.reasons`. A reason is free text
         from the scanner and may quote the secret it matched, and RSP's K1
         counts an audit log as storage — writing it would store the very thing
@@ -165,6 +171,7 @@ class MemoryService:
         if not content:
             raise ValueError("content is empty — provide text to store.")
 
+        content = self._guarded([content], "update")[0]
         embedding = self.ctx.embedder.embed_documents([content])[0]
         memory = self.ctx.store.update(user_id, memory_id, content, embedding)
         if memory is None:
@@ -306,6 +313,11 @@ class MemoryService:
             raise ValueError(
                 "description is empty — it's what makes the file findable via recall."
             )
+
+        # The description is stored as this memory's content and embedded like
+        # any other text, so it goes through the guard like any other text.
+        # Before presigning, so a refused write never asks R2 for a URL.
+        description = self._guarded([description], "create_upload")[0]
 
         # Private by default: media is more likely personal than a shared text fact.
         ns = namespace or settings.media_namespace

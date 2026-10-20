@@ -86,8 +86,13 @@ def _build_auth() -> Auth:
 
 
 def _build_guard() -> Guard:
-    """No scanner is configured yet — the RSP-backed guard arrives in #158."""
-    return NoOpGuard()
+    """Imported lazily: an unconfigured deployment pays no import cost, which is
+    what keeps the cold-start path unchanged when nothing is scanned."""
+    if not settings.rsp_config:
+        return NoOpGuard()
+    from .guard.rsp_guard import RSPGuard
+
+    return RSPGuard(settings.rsp_config)
 
 
 def _build_rate_limiter() -> GlobalRateLimiter | None:

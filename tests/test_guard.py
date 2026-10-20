@@ -110,6 +110,43 @@ class TestBlockReachesNeitherEmbedderNorStore:
         assert len(guard.seen[0]) > 1, "expected the split chunks, not one blob"
 
 
+class TestEveryWritePathIsGuarded:
+    """A path that persists caller text without the guard is a way around it.
+    `update` is the sharpest: store something harmless, then edit it to the
+    secret, and nothing ever scanned the value that landed in the store."""
+
+    def test_update_is_refused(self):
+        allowing, _ = _service(_FixedGuard(Verdict.ALLOW))
+        mid = allowing.remember("alice", "harmless")["ids"][0]
+
+        blocking = MemoryService(
+            replace(allowing.ctx, guard=_FixedGuard(Verdict.BLOCK))
+        )
+        with pytest.raises(GuardBlocked):
+            blocking.update("alice", mid, SECRET)
+        assert allowing.get_memory("alice", mid)["content"] == "harmless"
+
+    def test_update_stores_the_redacted_text(self):
+        allowing, _ = _service(_FixedGuard(Verdict.ALLOW))
+        mid = allowing.remember("alice", "harmless")["ids"][0]
+
+        redacting = MemoryService(
+            replace(
+                allowing.ctx, guard=_FixedGuard(Verdict.REDACT, chunks=["[REDACTED]"])
+            )
+        )
+        assert redacting.update("alice", mid, SECRET)["content"] == "[REDACTED]"
+
+    def test_create_upload_is_refused(self, fake_blob_store):
+        guard = _FixedGuard(Verdict.BLOCK)
+        base = build_context()
+        ctx = replace(base, guard=guard, blob_store=fake_blob_store)
+        service = MemoryService(ctx)
+        with pytest.raises(GuardBlocked):
+            service.create_upload("alice", "x.png", "image/png", SECRET)
+        assert service.list_memories("alice", namespace="media")["total"] == 0
+
+
 class TestRedactIsWhatGetsStored:
     def test_the_replacement_is_embedded_and_stored(self):
         guard = _FixedGuard(Verdict.REDACT, chunks=["[REDACTED]"])
