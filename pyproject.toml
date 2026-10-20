@@ -29,7 +29,13 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+# Opt-in, so the default image is byte-for-byte what it was: a deployment that
+# sets no POLYMNEMO_RSP_CONFIG never installs this. The distribution is named
+# `rag-security-protocol` because `rsp` on PyPI is an unrelated SSH proxy; the
+# import is still `rsp`.
+rsp = ["rag-security-protocol>=0.1.1,<0.2"]
 dev = [
+    "rag-security-protocol>=0.1.1,<0.2",  # guard tests use the real runtime
     "pytest>=8.0",
     "pytest-asyncio>=0.24",
     "pytest-cov>=5",
