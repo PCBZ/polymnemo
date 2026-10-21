@@ -24,10 +24,25 @@ ROOT = Path(__file__).resolve().parent.parent
 TOKENS_CMD = ["-m", "polymnemo.plugins.tokens"]
 GITLEAKS_CMD = [str(ROOT / "plugins" / "gitleaks" / "main.py")]
 STUB = Path(__file__).parent / "fake_gitleaks.py"
+FIXTURE = Path(__file__).parent / "fixtures" / "gitleaks-offsets.json"
+CASES = json.loads(FIXTURE.read_text())["tests"]
+REPLACEMENT = "[REDACTED:secret]"
+
+
+def _redacted(content: str, spans: list[dict]) -> str:
+    """Apply the recorded byte spans the way the host does (S4)."""
+    raw = content.encode("utf-8")
+    out, at = b"", 0
+    for span in sorted(spans, key=lambda s: s["start"]):
+        out += raw[at : span["start"]] + REPLACEMENT.encode("utf-8")
+        at = span["end"]
+    return (out + raw[at:]).decode("utf-8")
+
 
 # A real-shaped polymnemo token: pmn_ + 43 urlsafe characters.
 TOKEN = "pmn_" + "AbCdEfGhIjKlMnOpQrStUvWxYz0123456789_-abcde"
-AWS = "AKIAFAKESECRETVALUE1"
+# Case 1 of the recorded fixture: one key, one span, on line one.
+CASE_ONE = "deploy with AKIALALEMEL33243OLIB today"
 
 
 def _config(tmp_path: Path, *plugins: tuple[str, list[str]]) -> Path:
@@ -83,38 +98,47 @@ class TestOurOwnTokens:
         assert tokens_guard.inspect([text]).verdict is Verdict.ALLOW
 
 
-class TestGitleaks:
-    def test_a_credential_is_redacted(self, gitleaks_guard):
-        outcome = gitleaks_guard.inspect([f"key: {AWS} tail"])
-        assert outcome.verdict is Verdict.REDACT
-        assert AWS not in outcome.chunks[0]
-        assert outcome.chunks[0] == "key: [REDACTED:secret] tail"
+class TestGitleaksAgainstRecordedCases:
+    """Driven by tests/fixtures/gitleaks-offsets.json, transcribed from what
+    gitleaks 8.30.1 actually emitted. The adapter's job is to turn those
+    line/column positions into byte offsets, and the cases carry both sides --
+    so a wrong formula here cannot agree with itself the way invented numbers
+    would."""
 
-    def test_offsets_are_bytes_not_code_points(self, gitleaks_guard):
-        """The trap the vendored adapter exists for. With multi-byte text
-        before the match, a code-point index points at the wrong place and
-        redacts the wrong run -- silently, with no error."""
-        outcome = gitleaks_guard.inspect([f"密钥是 {AWS} 结束"])
-        assert outcome.verdict is Verdict.REDACT
-        assert outcome.chunks[0] == "密钥是 [REDACTED:secret] 结束"
+    @pytest.mark.parametrize("case", CASES, ids=[c["comment"][:40] for c in CASES])
+    def test_the_adapter_produces_the_recorded_spans(self, case, tmp_path, monkeypatch):
+        monkeypatch.setenv("RSP_GITLEAKS", str(STUB))
+        monkeypatch.setenv("FAKE_GITLEAKS_CASE", str(case["tcId"]))
+        guard = RSPGuard(_config(tmp_path, ("gitleaks", GITLEAKS_CMD)))
+        outcome = guard.inspect([case["content"]])
 
-    def test_a_match_on_a_later_line(self, gitleaks_guard):
-        """Columns are counted from the previous line's newline byte, so a
-        finding below line one is where the off-by-one lives."""
-        outcome = gitleaks_guard.inspect([f"first line\nsecond\nkey: {AWS} tail"])
-        assert outcome.verdict is Verdict.REDACT
-        assert outcome.chunks[0] == "first line\nsecond\nkey: [REDACTED:secret] tail"
+        findings, spans = case["findings"], case["spans"]
+        if not findings:
+            assert outcome.verdict is Verdict.ALLOW
+            assert outcome.chunks == [case["content"]]
+        elif len(spans) == len(findings):
+            # Every finding placed: redact, and the replacement lands exactly
+            # on the recorded byte ranges.
+            assert outcome.verdict is Verdict.REDACT
+            assert outcome.chunks[0] == _redacted(case["content"], spans)
+        else:
+            # A finding the adapter could not place is a secret it cannot
+            # point at, so redacting the rest would leave it in the chunk.
+            assert outcome.verdict is Verdict.BLOCK
+            assert outcome.chunks == []
 
-    def test_clean_text_passes(self, gitleaks_guard):
-        assert gitleaks_guard.inspect(["nothing secret here"]).verdict is Verdict.ALLOW
+    def test_clean_text_passes(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("RSP_GITLEAKS", str(STUB))
+        guard = RSPGuard(_config(tmp_path, ("gitleaks", GITLEAKS_CMD)))
+        assert guard.inspect(["nothing secret here"]).verdict is Verdict.ALLOW
 
     def test_a_broken_binary_blocks_rather_than_allows(self, tmp_path, monkeypatch):
         """A gitleaks that cannot run prints nothing, exactly like a clean
-        chunk. Reading that as ALLOW is the failure this whole design refuses."""
+        chunk. Reading that as ALLOW is the failure this design refuses."""
         monkeypatch.setenv("RSP_GITLEAKS", str(STUB))
         monkeypatch.setenv("FAKE_GITLEAKS_MODE", "fail")
         guard = RSPGuard(_config(tmp_path, ("gitleaks", GITLEAKS_CMD)))
-        assert guard.inspect([f"key: {AWS}"]).verdict is Verdict.BLOCK
+        assert guard.inspect(["anything"]).verdict is Verdict.BLOCK
 
 
 class TestBothTogether:
@@ -125,9 +149,11 @@ class TestBothTogether:
                 tmp_path, ("polymnemo-tokens", TOKENS_CMD), ("gitleaks", GITLEAKS_CMD)
             )
         )
-        # gitleaks does not know our format; our plugin does not know AWS.
+        # Our plugin does not know an AWS key; gitleaks does not know ours.
         assert guard.inspect([f"token {TOKEN}"]).verdict is Verdict.BLOCK
-        assert guard.inspect([f"key: {AWS}"]).verdict is Verdict.REDACT
+        monkeypatch.setenv("FAKE_GITLEAKS_CASE", "1")
+        assert guard.inspect([CASE_ONE]).verdict is Verdict.REDACT
+        monkeypatch.delenv("FAKE_GITLEAKS_CASE")
         assert guard.inspect(["an ordinary memory"]).verdict is Verdict.ALLOW
 
 
@@ -138,9 +164,12 @@ class TestThroughTheService:
             service.remember("alice", f"my polymnemo key is {TOKEN}")
         assert service.list_memories("alice")["total"] == 0
 
-    def test_a_redacted_credential_is_what_gets_stored(self, gitleaks_guard):
+    def test_a_redacted_credential_is_what_gets_stored(
+        self, gitleaks_guard, monkeypatch
+    ):
+        monkeypatch.setenv("FAKE_GITLEAKS_CASE", "1")
         service = MemoryService(replace(build_context(), guard=gitleaks_guard))
-        result = service.remember("alice", f"deploy key: {AWS}")
+        result = service.remember("alice", CASE_ONE)
         stored = service.get_memory("alice", result["ids"][0])["content"]
-        assert AWS not in stored
-        assert "[REDACTED:secret]" in stored
+        assert "AKIALALEMEL33243OLIB" not in stored
+        assert REPLACEMENT in stored

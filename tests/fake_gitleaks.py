@@ -1,19 +1,33 @@
 #!/usr/bin/env python3
-"""A stand-in for the gitleaks binary, speaking its CLI and report format.
+"""A stand-in for the gitleaks binary, replaying a recorded case.
 
 The real binary is installed in the image, not here, so the vendored plugin is
-exercised against this. What matters is the contract the plugin depends on:
-`version`, exit 0 for clean and 2 for found, and a JSON report whose columns
-count the way gitleaks counts them.
+exercised against this. The findings it emits are not invented: FAKE_GITLEAKS_CASE
+names a case in tests/fixtures/gitleaks-offsets.json, transcribed from what
+gitleaks 8.30.1 actually printed. Making them up would produce numbers that
+agree with whatever the adapter assumes, which is the failure the fixture's own
+note describes -- and which an earlier version of this file reproduced.
 
-FAKE_GITLEAKS_MODE=fail makes it exit non-zero, which must not read as clean.
+FAKE_GITLEAKS_MODE=fail exits non-zero, which must not read as a clean chunk.
 """
 
 import json
 import os
+import pathlib
 import sys
 
-MARKER = b"AKIAFAKESECRETVALUE1"
+FOUND = 2
+FIXTURE = pathlib.Path(__file__).parent / "fixtures" / "gitleaks-offsets.json"
+
+
+def case() -> dict | None:
+    wanted = os.environ.get("FAKE_GITLEAKS_CASE")
+    if not wanted:
+        return None
+    for entry in json.loads(FIXTURE.read_text())["tests"]:
+        if str(entry["tcId"]) == str(wanted):
+            return entry
+    raise SystemExit(f"fake-gitleaks: no case {wanted!r}")
 
 
 def main() -> int:
@@ -24,31 +38,13 @@ def main() -> int:
         print("boom", file=sys.stderr)
         return 1
 
-    content = sys.stdin.buffer.read()
-    at = content.find(MARKER)
-    if at < 0:
+    sys.stdin.buffer.read()  # drain, so the writer never sees a broken pipe
+    entry = case()
+    findings = entry["findings"] if entry else []
+    if not findings:
         return 0
-
-    # gitleaks counts a line's columns from the newline byte ending the
-    # previous line, so on line 1 the origin is 0 and StartColumn is 1-based.
-    line = content.count(b"\n", 0, at) + 1
-    origin = 0 if line == 1 else content.rfind(b"\n", 0, at)
-    report = [
-        {
-            "RuleID": "aws-access-token",
-            "Match": MARKER.decode(),
-            "StartLine": line,
-            "EndLine": line,
-            # One formula for both cases. The plugin's origin is 0 on line 1
-            # and the previous newline's byte index after it, which is exactly
-            # what `origin` holds here -- so no special case is needed, and
-            # writing one got the multi-line offsets wrong.
-            "StartColumn": at - origin + 1,
-            "EndColumn": at + len(MARKER) - origin,
-        }
-    ]
-    sys.stdout.write(json.dumps(report))
-    return 2
+    sys.stdout.write(json.dumps(findings))
+    return FOUND
 
 
 if __name__ == "__main__":

@@ -1,0 +1,295 @@
+{
+  "tool": "gitleaks 8.30.1",
+  "schema": "gitleaks-offsets.schema.json",
+  "about": "Line-and-column positions as gitleaks reports them, and the byte offsets SPEC.md S1 requires, for every adapter under examples/. Transcribed from what the binary emitted; a number invented here would agree with whatever the code assumes, which is how an end offset was once wrong for every finding spanning two lines. Findings go in, spans come out — a case expecting none says so with an empty list.",
+  "notes": {
+    "ColumnsFromNewline": "gitleaks counts a line's columns from the newline byte that ended the previous line, not from the line's first byte. Only line one matches the 1-based column anyone assumes; everywhere else the column is one lower.",
+    "EndColumnBelongsToEndLine": "EndColumn is an offset into EndLine, which differs from StartLine whenever a finding spans lines. Read against the start line, this PEM block ends 141 bytes early: its first line redacted, the rest published.",
+    "BytesNotCharacters": "The offsets index bytes (S1). 密钥 is two characters and six bytes, so anything counting characters is off by the difference.",
+    "SelfAuditing": "A span that does not slice Match back out is dropped. gitleaks has had off-by-one bugs in these columns, and a span nobody verified redacts the wrong bytes. Dropping is not letting it through: the caller turns a finding that produced no span into BLOCK.",
+    "HostWouldReject": "A span out of range, empty, or inside a character is refused by the host (S3), and a refused span blocks the chunk. An adapter should not manufacture one."
+  },
+  "tests": [
+    {
+      "tcId": 1,
+      "comment": "a key on the first line",
+      "flags": [],
+      "content": "deploy with AKIALALEMEL33243OLIB today",
+      "findings": [
+        {
+          "RuleID": "aws-access-token",
+          "StartLine": 1,
+          "EndLine": 1,
+          "StartColumn": 13,
+          "EndColumn": 32,
+          "Match": "AKIALALEMEL33243OLIB"
+        }
+      ],
+      "spans": [
+        {
+          "start": 12,
+          "end": 32,
+          "type": "aws-access-token"
+        }
+      ]
+    },
+    {
+      "tcId": 2,
+      "comment": "multi-byte text before the key on the same line",
+      "flags": [
+        "BytesNotCharacters"
+      ],
+      "content": "密钥 AKIALALEMEL33243OLIB 在后面",
+      "findings": [
+        {
+          "RuleID": "aws-access-token",
+          "StartLine": 1,
+          "EndLine": 1,
+          "StartColumn": 8,
+          "EndColumn": 27,
+          "Match": "AKIALALEMEL33243OLIB"
+        }
+      ],
+      "spans": [
+        {
+          "start": 7,
+          "end": 27,
+          "type": "aws-access-token"
+        }
+      ]
+    },
+    {
+      "tcId": 3,
+      "comment": "a key on a later line",
+      "flags": [
+        "ColumnsFromNewline"
+      ],
+      "content": "header\nexport K=AKIALALEMEL33243OLIB\n",
+      "findings": [
+        {
+          "RuleID": "aws-access-token",
+          "StartLine": 2,
+          "EndLine": 2,
+          "StartColumn": 11,
+          "EndColumn": 30,
+          "Match": "AKIALALEMEL33243OLIB"
+        }
+      ],
+      "spans": [
+        {
+          "start": 16,
+          "end": 36,
+          "type": "aws-access-token"
+        }
+      ]
+    },
+    {
+      "tcId": 4,
+      "comment": "a key on a later line, with multi-byte lines above it",
+      "flags": [
+        "ColumnsFromNewline",
+        "BytesNotCharacters"
+      ],
+      "content": "密钥\n说明\nK=AKIALALEMEL33243OLIB\n",
+      "findings": [
+        {
+          "RuleID": "aws-access-token",
+          "StartLine": 3,
+          "EndLine": 3,
+          "StartColumn": 4,
+          "EndColumn": 23,
+          "Match": "AKIALALEMEL33243OLIB"
+        }
+      ],
+      "spans": [
+        {
+          "start": 16,
+          "end": 36,
+          "type": "aws-access-token"
+        }
+      ]
+    },
+    {
+      "tcId": 5,
+      "comment": "a private key spanning four lines",
+      "flags": [
+        "EndColumnBelongsToEndLine"
+      ],
+      "content": "cfg:\n-----BEGIN RSA PRIVATE KEY-----\nMIIBOgIBAAJBAKj34GkxFhD90vcNLYLInFEX6Ppy1tPf9Cnzj4p4WGeKLs1Pt8Qu\nKUpRKfFLfRYC9AIKjbJTWit+CqvjWYzvQwECAwEAAQ==\n-----END RSA PRIVATE KEY-----\ntrailing\n",
+      "findings": [
+        {
+          "RuleID": "private-key",
+          "StartLine": 2,
+          "EndLine": 5,
+          "StartColumn": 2,
+          "EndColumn": 30,
+          "Match": "-----BEGIN RSA PRIVATE KEY-----\nMIIBOgIBAAJBAKj34GkxFhD90vcNLYLInFEX6Ppy1tPf9Cnzj4p4WGeKLs1Pt8Qu\nKUpRKfFLfRYC9AIKjbJTWit+CqvjWYzvQwECAwEAAQ==\n-----END RSA PRIVATE KEY-----"
+        }
+      ],
+      "spans": [
+        {
+          "start": 5,
+          "end": 176,
+          "type": "private-key"
+        }
+      ]
+    },
+    {
+      "tcId": 6,
+      "comment": "the same key twice, each with its own line's origin",
+      "flags": [
+        "ColumnsFromNewline"
+      ],
+      "content": "AKIALALEMEL33243OLIB\nfiller\nAKIALALEMEL33243OLIB",
+      "findings": [
+        {
+          "RuleID": "aws-access-token",
+          "StartLine": 1,
+          "EndLine": 1,
+          "StartColumn": 1,
+          "EndColumn": 20,
+          "Match": "AKIALALEMEL33243OLIB"
+        },
+        {
+          "RuleID": "aws-access-token",
+          "StartLine": 3,
+          "EndLine": 3,
+          "StartColumn": 2,
+          "EndColumn": 21,
+          "Match": "AKIALALEMEL33243OLIB"
+        }
+      ],
+      "spans": [
+        {
+          "start": 0,
+          "end": 20,
+          "type": "aws-access-token"
+        },
+        {
+          "start": 28,
+          "end": 48,
+          "type": "aws-access-token"
+        }
+      ]
+    },
+    {
+      "tcId": 7,
+      "comment": "a report with nothing in it",
+      "flags": [],
+      "content": "anything",
+      "findings": [],
+      "spans": []
+    },
+    {
+      "tcId": 8,
+      "comment": "a finding on a line the content does not have",
+      "flags": [
+        "HostWouldReject"
+      ],
+      "content": "one line",
+      "findings": [
+        {
+          "RuleID": "aws-access-token",
+          "StartLine": 99,
+          "EndLine": 99,
+          "StartColumn": 1,
+          "EndColumn": 20,
+          "Match": "AKIALALEMEL33243OLIB"
+        }
+      ],
+      "spans": []
+    },
+    {
+      "tcId": 9,
+      "comment": "a finding with no position at all",
+      "flags": [
+        "HostWouldReject"
+      ],
+      "content": "AKIALALEMEL33243OLIB",
+      "findings": [
+        {
+          "RuleID": "aws-access-token",
+          "Match": "AKIALALEMEL33243OLIB"
+        }
+      ],
+      "spans": []
+    },
+    {
+      "tcId": 10,
+      "comment": "offsets one column late, which do not slice the match back out",
+      "flags": [
+        "SelfAuditing"
+      ],
+      "content": "deploy with AKIALALEMEL33243OLIB today",
+      "findings": [
+        {
+          "RuleID": "aws-access-token",
+          "StartLine": 1,
+          "EndLine": 1,
+          "StartColumn": 14,
+          "EndColumn": 32,
+          "Match": "AKIALALEMEL33243OLIB"
+        }
+      ],
+      "spans": []
+    },
+    {
+      "tcId": 11,
+      "comment": "an end column past the content",
+      "flags": [
+        "HostWouldReject"
+      ],
+      "content": "short",
+      "findings": [
+        {
+          "RuleID": "aws-access-token",
+          "StartLine": 1,
+          "EndLine": 1,
+          "StartColumn": 1,
+          "EndColumn": 400,
+          "Match": "AKIALALEMEL33243OLIB"
+        }
+      ],
+      "spans": []
+    },
+    {
+      "tcId": 12,
+      "comment": "an end column past the content, with the match as its tail",
+      "flags": [
+        "HostWouldReject",
+        "SelfAuditing"
+      ],
+      "content": "密钥 AKIALALEMEL33243OLIB",
+      "findings": [
+        {
+          "RuleID": "aws-access-token",
+          "StartLine": 1,
+          "EndLine": 1,
+          "StartColumn": 8,
+          "EndColumn": 400,
+          "Match": "AKIALALEMEL33243OLIB"
+        }
+      ],
+      "spans": []
+    },
+    {
+      "tcId": 13,
+      "comment": "an empty match, whose offsets cross",
+      "flags": [
+        "HostWouldReject"
+      ],
+      "content": "密钥",
+      "findings": [
+        {
+          "RuleID": "aws-access-token",
+          "StartLine": 1,
+          "EndLine": 1,
+          "StartColumn": 3,
+          "EndColumn": 2,
+          "Match": ""
+        }
+      ],
+      "spans": []
+    }
+  ]
+}
