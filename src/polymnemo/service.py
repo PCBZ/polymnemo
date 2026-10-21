@@ -294,7 +294,15 @@ class MemoryService:
 
         The bytes never pass through MCP: we embed the text ``description`` (so the
         file is findable via ``recall``), store a pointer (``object_key``) in
-        Postgres, and hand back a short-lived upload URL. The memory stays
+        Postgres, and hand back a short-lived upload URL.
+
+        That also means the file's CONTENTS are never scanned (#160). Only the
+        description goes through the guard. Decided rather than overlooked: the
+        bytes would have to be pulled back out of object storage to be read, so
+        it could only ever be detect-and-delete; the realistic risk is a
+        screenshot of a terminal, which a text scanner cannot read anyway; and
+        media defaults to a private namespace, so the exposure is to the person
+        who uploaded the file. The memory stays
         UNCONFIRMED — hidden from recall — until ``confirm_upload`` verifies the
         object (and enforces the size cap).
         """
