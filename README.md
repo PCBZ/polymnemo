@@ -164,10 +164,13 @@ npx @modelcontextprotocol/inspector
   to its owner. Sessions and media default to private namespaces.
 - **Chunking** — long content is split into chunks on write (one vector each), so
   `remember` may return several ids and `recall` returns the closest chunks.
-- **Secret scanning** — optional, off unless configured. When on, the **text** of
-  a memory is scanned before it is embedded or stored, so a refused write was
-  never written rather than deleted afterwards. It covers `remember`,
-  `save_session`, `update` and a media memory's description.
+- **Secret scanning** — optional, and **off unless you turn it on**: set
+  `POLYMNEMO_RSP_CONFIG` to a scanner config (the image ships one at
+  `/app/plugins/rsp.toml`). Unset, every write goes through a no-op guard and
+  nothing is scanned. When on, the **text** of a memory is scanned before it is
+  embedded or stored, so a refused write was never written rather than deleted
+  afterwards. It covers `remember`, `save_session`, `update` and a media
+  memory's description.
   **The contents of uploaded files are not scanned** and are stored as you sent
   them: the bytes go straight to object storage under a presigned URL and never
   pass through this server. A file's description is scanned; the file is not.
@@ -202,6 +205,7 @@ work.
 | `POLYMNEMO_HOST` / `POLYMNEMO_PORT` / `POLYMNEMO_MCP_PATH` | `127.0.0.1` / `8000` / `/mcp` | Transport. |
 | `POLYMNEMO_RATELIMIT_ENABLED` / `_PER_MIN` | `false` / `600` | Optional global rate limit (ops per minute). |
 | `POLYMNEMO_BLOB_BACKEND` (+ `_BUCKET` / `_ENDPOINT_URL` / `_ACCESS_KEY_ID` / `_SECRET_ACCESS_KEY`) | `none` | Object storage for media memories; `s3` = Cloudflare R2 / S3-compatible. |
+| `POLYMNEMO_RSP_CONFIG` | *(unset)* | Path to a scanner config; unset means no scanning. The image ships one at `/app/plugins/rsp.toml`. |
 
 ## Development
 
