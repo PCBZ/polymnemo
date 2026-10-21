@@ -21,7 +21,9 @@ def loads(raw: str) -> Any:
     """The parsed message, or ValueError naming what the grammar refuses."""
     if raw.strip(WHITESPACE) != raw.strip():
         raise ValueError("framed by something other than space, tab, CR or LF")
-    return _within_range(json.loads(raw, object_pairs_hook=_no_repeats, parse_constant=_not_json))
+    return _within_range(
+        json.loads(raw, object_pairs_hook=_no_repeats, parse_constant=_not_json)
+    )
 
 
 def _no_repeats(pairs: list[tuple[str, Any]]) -> dict[str, Any]:

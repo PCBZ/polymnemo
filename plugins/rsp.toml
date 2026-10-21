@@ -13,7 +13,7 @@
 # recalls it.
 [[plugins]]
 name = "polymnemo-tokens"
-command = ["python", "/app/plugins/polymnemo_tokens/main.py"]
+command = ["python", "-m", "polymnemo.plugins.tokens"]
 
 # Cloud and service credentials. Wraps the gitleaks binary installed in the
 # image; a gitleaks that cannot run raises rather than reporting a clean

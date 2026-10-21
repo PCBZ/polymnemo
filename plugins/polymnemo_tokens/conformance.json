@@ -1,3 +1,0 @@
-{ "name": "polymnemo-tokens", "role": "any",
-  "source": ["{python}", "{dir}/main.py"],
-  "toolchain": [], "wraps": [] }

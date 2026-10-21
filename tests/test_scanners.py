@@ -8,6 +8,7 @@ way gitleaks counts them — not gitleaks' own rules.
 
 from __future__ import annotations
 
+import json
 import sys
 from dataclasses import replace
 from pathlib import Path
@@ -20,8 +21,8 @@ from polymnemo.guard.rsp_guard import RSPGuard
 from polymnemo.service import MemoryService
 
 ROOT = Path(__file__).resolve().parent.parent
-TOKENS = ROOT / "plugins" / "polymnemo_tokens" / "main.py"
-GITLEAKS = ROOT / "plugins" / "gitleaks" / "main.py"
+TOKENS_CMD = ["-m", "polymnemo.plugins.tokens"]
+GITLEAKS_CMD = [str(ROOT / "plugins" / "gitleaks" / "main.py")]
 STUB = Path(__file__).parent / "fake_gitleaks.py"
 
 # A real-shaped polymnemo token: pmn_ + 43 urlsafe characters.
@@ -29,13 +30,13 @@ TOKEN = "pmn_" + "AbCdEfGhIjKlMnOpQrStUvWxYz0123456789_-abcde"
 AWS = "AKIAFAKESECRETVALUE1"
 
 
-def _config(tmp_path: Path, *plugins: tuple[str, Path]) -> Path:
+def _config(tmp_path: Path, *plugins: tuple[str, list[str]]) -> Path:
     path = tmp_path / "rsp.toml"
     path.write_text(
         "".join(
             f'[[plugins]]\nname = "{name}"\n'
-            f'command = ["{sys.executable}", "{script}"]\n\n'
-            for name, script in plugins
+            f"command = {json.dumps([sys.executable, *args])}\n\n"
+            for name, args in plugins
         )
     )
     return path
@@ -43,13 +44,13 @@ def _config(tmp_path: Path, *plugins: tuple[str, Path]) -> Path:
 
 @pytest.fixture
 def tokens_guard(tmp_path):
-    return RSPGuard(_config(tmp_path, ("polymnemo-tokens", TOKENS)))
+    return RSPGuard(_config(tmp_path, ("polymnemo-tokens", TOKENS_CMD)))
 
 
 @pytest.fixture
 def gitleaks_guard(tmp_path, monkeypatch):
     monkeypatch.setenv("RSP_GITLEAKS", str(STUB))
-    return RSPGuard(_config(tmp_path, ("gitleaks", GITLEAKS)))
+    return RSPGuard(_config(tmp_path, ("gitleaks", GITLEAKS_CMD)))
 
 
 class TestOurOwnTokens:
@@ -112,7 +113,7 @@ class TestGitleaks:
         chunk. Reading that as ALLOW is the failure this whole design refuses."""
         monkeypatch.setenv("RSP_GITLEAKS", str(STUB))
         monkeypatch.setenv("FAKE_GITLEAKS_MODE", "fail")
-        guard = RSPGuard(_config(tmp_path, ("gitleaks", GITLEAKS)))
+        guard = RSPGuard(_config(tmp_path, ("gitleaks", GITLEAKS_CMD)))
         assert guard.inspect([f"key: {AWS}"]).verdict is Verdict.BLOCK
 
 
@@ -120,7 +121,9 @@ class TestBothTogether:
     def test_each_catches_what_the_other_misses(self, tmp_path, monkeypatch):
         monkeypatch.setenv("RSP_GITLEAKS", str(STUB))
         guard = RSPGuard(
-            _config(tmp_path, ("polymnemo-tokens", TOKENS), ("gitleaks", GITLEAKS))
+            _config(
+                tmp_path, ("polymnemo-tokens", TOKENS_CMD), ("gitleaks", GITLEAKS_CMD)
+            )
         )
         # gitleaks does not know our format; our plugin does not know AWS.
         assert guard.inspect([f"token {TOKEN}"]).verdict is Verdict.BLOCK

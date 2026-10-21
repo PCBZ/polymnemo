@@ -30,9 +30,10 @@ COPY pyproject.toml README.md LICENSE ./
 COPY src ./src
 RUN pip install --no-cache-dir ".[rsp]"
 
-# The content scanners (#163). Inert unless POLYMNEMO_RSP_CONFIG names a
-# config: nothing is imported and nothing is spawned, so this costs runtime
-# nothing and ~7 MB of image.
+# The vendored gitleaks plugin and the scanner config (#163). Our own plugin
+# is not here -- it ships inside the package as polymnemo.plugins.tokens.
+# Inert unless POLYMNEMO_RSP_CONFIG names a config: nothing is imported and
+# nothing is spawned, so this costs runtime nothing and ~7 MB of image.
 COPY plugins ./plugins
 
 # gitleaks, pinned and checksummed. Downloaded with python rather than curl,
