@@ -164,6 +164,13 @@ npx @modelcontextprotocol/inspector
   to its owner. Sessions and media default to private namespaces.
 - **Chunking** — long content is split into chunks on write (one vector each), so
   `remember` may return several ids and `recall` returns the closest chunks.
+- **Secret scanning** — optional, off unless configured. When on, the **text** of
+  a memory is scanned before it is embedded or stored, so a refused write was
+  never written rather than deleted afterwards. It covers `remember`,
+  `save_session`, `update` and a media memory's description.
+  **The contents of uploaded files are not scanned** and are stored as you sent
+  them: the bytes go straight to object storage under a presigned URL and never
+  pass through this server. A file's description is scanned; the file is not.
 
 ## Tools
 
