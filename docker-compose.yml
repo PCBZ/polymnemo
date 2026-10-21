@@ -1,0 +1,46 @@
+# Local development: the server, built from this repo, against a real Postgres.
+#
+# This exists because the scanners cannot be exercised end to end without a
+# built image. The gitleaks binary lives in the image, so the unit tests run a
+# stub -- what they check is the contract with it, not the real thing. This
+# runs the real thing.
+#
+#   docker compose up --build
+#   curl -s localhost:8000/tokens/login -o /dev/null -w '%{http_code}\n'
+#
+# Not for deployment. Azure runs the same image with Terraform-supplied config;
+# the values here are local throwaways.
+
+services:
+  db:
+    image: pgvector/pgvector:pg17
+    environment:
+      POSTGRES_PASSWORD: postgres
+    ports: ["5432:5432"]
+    healthcheck:
+      # The app refuses to start without a usable database, so wait for ready
+      # rather than for the container.
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 2s
+      timeout: 3s
+      retries: 15
+    volumes:
+      - ./scripts/schema.sql:/docker-entrypoint-initdb.d/schema.sql:ro
+
+  polymnemo:
+    build: .
+    depends_on:
+      db:
+        condition: service_healthy
+    ports: ["8000:8080"]
+    environment:
+      POLYMNEMO_DATABASE_URL: postgresql://postgres:postgres@db:5432/postgres
+      POLYMNEMO_HOST: 0.0.0.0
+      PORT: "8080"
+      POLYMNEMO_LOG_LEVEL: DEBUG
+      # Turns the scanners on. Unset this to reproduce the default deployment,
+      # where the guard is a no-op and neither plugin is ever spawned.
+      POLYMNEMO_RSP_CONFIG: /app/plugins/rsp.toml
+      # Local throwaways. Real deployments get these from GitHub Secrets via
+      # Terraform; nothing here is a credential for anything.
+      POLYMNEMO_API_KEYS: local-dev-key:alice
