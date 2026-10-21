@@ -1,0 +1,23 @@
+# Scanners run at the on_chunk hook, before anything is embedded or stored.
+# Point POLYMNEMO_RSP_CONFIG at this file to enable them; unset, the guard is
+# a no-op and neither plugin is ever spawned.
+#
+# Absolute paths because the container layout is fixed and a relative path
+# would depend on the working directory the server happened to start in.
+#
+# Each plugin is one subprocess per chunk, so the list is deliberately short.
+# See the Performance wiki page for what that costs.
+
+# Our own API tokens. No other scanner knows this format, and the default
+# namespace is world-readable, so a pasted token authenticates anyone who
+# recalls it.
+[[plugins]]
+name = "polymnemo-tokens"
+command = ["python", "-m", "polymnemo.plugins.tokens"]
+
+# Cloud and service credentials. Wraps the gitleaks binary installed in the
+# image; a gitleaks that cannot run raises rather than reporting a clean
+# chunk, which the host turns into BLOCK.
+[[plugins]]
+name = "gitleaks"
+command = ["python", "/app/plugins/gitleaks/main.py"]

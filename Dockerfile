@@ -28,7 +28,27 @@ WORKDIR /app
 # a plain install has everything the deployed server needs.
 COPY pyproject.toml README.md LICENSE ./
 COPY src ./src
-RUN pip install --no-cache-dir "."
+RUN pip install --no-cache-dir ".[rsp]"
+
+# The vendored gitleaks plugin and the scanner config (#163). Our own plugin
+# is not here -- it ships inside the package as polymnemo.plugins.tokens.
+# Inert unless POLYMNEMO_RSP_CONFIG names a config: nothing is imported and
+# nothing is spawned, so the scanners cost runtime nothing when unused.
+COPY plugins ./plugins
+
+# gitleaks, copied out of its own published image rather than downloaded and
+# checksummed by hand. The tag pins the version, and Docker verifies the image
+# it pulls, so there is no hash here to keep in step with the version.
+#
+# Two things checked before relying on this: the binary is at /usr/bin/gitleaks
+# in that image, and although the image is Alpine, the binary is statically
+# linked (ELF EXEC, no interpreter), so it runs on this Debian base. The
+# `gitleaks version` below is what would catch that changing.
+#
+# Copied as root, before the user switch, and left world-executable so the
+# unprivileged runtime user can run it. ~22 MB.
+COPY --from=zricethezav/gitleaks:v8.30.1 /usr/bin/gitleaks /usr/local/bin/gitleaks
+RUN chmod 0755 /usr/local/bin/gitleaks && gitleaks version
 
 # Drop root before baking, so the cache is written by the uid that later reads
 # it. Nothing in the app writes to disk, so read-only ownership is enough.
