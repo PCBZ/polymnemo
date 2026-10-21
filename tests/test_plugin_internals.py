@@ -80,7 +80,7 @@ class TestStrictJson:
     @pytest.mark.parametrize("token", ["NaN", "Infinity", "-Infinity"])
     def test_the_javascript_constants_are_not_numbers(self, token):
         with pytest.raises(ValueError):
-            _strictjson.loads('{"n": %s}' % token)
+            _strictjson.loads(f'{{"n": {token}}}')
 
     @pytest.mark.parametrize("pad", ["\x0b", "\x0c"])
     def test_python_whitespace_is_not_json_whitespace(self, pad):
@@ -102,7 +102,7 @@ class TestStrictJson:
     def test_values_inside_lists_are_checked(self):
         assert _strictjson.loads('{"a": [1, 2]}')["a"] == [1, 2]
         with pytest.raises(ValueError):
-            _strictjson.loads('{"a": [1, %d]}' % 2**53)
+            _strictjson.loads(f'{{"a": [1, {2**53}]}}')
 
     def test_ordinary_framing_is_accepted(self):
         assert _strictjson.loads(' \t\n\r{"a": 1}\n ')["a"] == 1
