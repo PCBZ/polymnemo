@@ -2,6 +2,7 @@
 with the pgvector extension and the schema applied (scripts/schema.sql)."""
 
 import os
+from contextlib import contextmanager
 
 import pytest
 
@@ -266,24 +267,29 @@ def _seed_crowded(store):
         conn.execute(text("ANALYZE memories"))
 
 
-def _force_hnsw(conn) -> None:
-    """Make the HNSW index the only way to answer the query.
+@contextmanager
+def _hnsw_only(store):
+    """Yield a connection where HNSW is the only way to answer the query.
 
     Postgres will not otherwise use it here, and is right not to: with
     `namespace = 'shared'` matching a handful of rows, the B-tree on namespace
-    plus an exact sort is cheaper than walking a graph. That is the planner
-    protecting us -- at this size and selectivity the under-return does not
-    happen at all.
+    plus an exact sort beats walking a graph. That is the planner protecting us
+    -- at this size and selectivity the under-return does not happen at all. It
+    stops protecting us once a namespace is large enough that the vector index
+    wins on cost, which is the state this reproduces.
 
-    It stops protecting us once the namespace is large enough that the vector
-    index wins on cost, which is the state this reproduces: drop the competing
-    index inside the transaction, where it rolls back at the end.
+    `connect()`, not `begin()`: the latter COMMITS on a clean exit, so the
+    dropped indexes would not come back and every later test would fail on a
+    missing index. Closing an uncommitted connection rolls the DDL back.
     """
     from sqlalchemy import text
 
-    conn.execute(text("DROP INDEX memories_namespace_idx"))
-    conn.execute(text("DROP INDEX memories_user_namespace_idx"))
-    conn.execute(text("SET LOCAL enable_seqscan = off"))
+    with store._engine.connect() as conn:
+        conn.execute(text("DROP INDEX memories_namespace_idx"))
+        conn.execute(text("DROP INDEX memories_user_namespace_idx"))
+        conn.execute(text("SET LOCAL enable_seqscan = off"))
+        yield conn
+        conn.rollback()  # explicit: the indexes are restored here
 
 
 def _search_sql(conn, *, iterative: str, ef_search: int = 4):
@@ -308,8 +314,7 @@ class TestASparseNamespaceDoesNotUnderReturn:
         from sqlalchemy import text
 
         _seed_crowded(store)
-        with store._engine.begin() as conn:
-            _force_hnsw(conn)
+        with _hnsw_only(store) as conn:
             plan = "\n".join(
                 r[0]
                 for r in conn.execute(
@@ -326,8 +331,7 @@ class TestASparseNamespaceDoesNotUnderReturn:
         """The bug, demonstrated. Without this the fix below proves nothing:
         a test that passes either way is not evidence."""
         _seed_crowded(store)
-        with store._engine.begin() as conn:
-            _force_hnsw(conn)
+        with _hnsw_only(store) as conn:
             rows = _search_sql(conn, iterative="off")
         assert len(rows) < TARGET_ROWS, (
             f"expected the filter to starve the candidate set, got {len(rows)} "
@@ -336,8 +340,7 @@ class TestASparseNamespaceDoesNotUnderReturn:
 
     def test_with_iterative_scan_every_match_comes_back(self, store):
         _seed_crowded(store)
-        with store._engine.begin() as conn:
-            _force_hnsw(conn)
+        with _hnsw_only(store) as conn:
             rows = _search_sql(conn, iterative="strict_order")
         assert len(rows) == TARGET_ROWS
 
