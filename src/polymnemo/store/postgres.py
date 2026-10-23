@@ -19,7 +19,17 @@ from collections.abc import Iterable, Sequence
 from datetime import datetime
 
 from pgvector.sqlalchemy import Vector
-from sqlalchemy import ARRAY, Text, create_engine, delete, func, or_, select, update
+from sqlalchemy import (
+    ARRAY,
+    Text,
+    create_engine,
+    delete,
+    event,
+    func,
+    or_,
+    select,
+    update,
+)
 from sqlalchemy import inspect as sa_inspect
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, defer, mapped_column
 
@@ -98,6 +108,46 @@ class MemoryRow(Base):
         )
 
 
+# Pre-0.8 pgvector has no such setting, and the SET fails. Warn once rather
+# than per connection: a deployment on an older pgvector should know its
+# filtered searches can come up short, without a line per pooled connection.
+_WARNED_NO_ITERATIVE_SCAN = False
+
+
+def _enable_iterative_scan(engine) -> None:
+    """Keep the HNSW scan going until enough rows survive the filter.
+
+    pgvector collects about `hnsw.ef_search` candidates by distance and only
+    then applies WHERE, so a selective namespace or visibility filter can leave
+    fewer than LIMIT -- rows that never entered the candidate set rather than
+    rows that ranked low, which reads as poor recall rather than as a bug
+    (#169). Iterative scan (pgvector 0.8) rescans until the limit is met.
+
+    `strict_order`, not `relaxed_order`: search returns a `score` to the caller,
+    and relaxed ordering can hand back rows slightly out of distance order,
+    which would contradict it. Relaxed is the lever if this proves too slow.
+
+    Set per connection rather than per query, so the cost of getting it wrong
+    is one log line at connect time instead of a failed search.
+    """
+
+    @event.listens_for(engine, "connect")
+    def _on_connect(dbapi_connection, _record):  # pragma: no cover - needs a DB
+        global _WARNED_NO_ITERATIVE_SCAN
+        try:
+            with dbapi_connection.cursor() as cursor:
+                cursor.execute("SET hnsw.iterative_scan = 'strict_order'")
+        except Exception as exc:
+            dbapi_connection.rollback()  # the failed SET aborted the transaction
+            if not _WARNED_NO_ITERATIVE_SCAN:
+                _WARNED_NO_ITERATIVE_SCAN = True
+                logger.warning(
+                    "hnsw.iterative_scan is unavailable (%s); filtered searches "
+                    "may return fewer rows than exist. Needs pgvector >= 0.8.",
+                    type(exc).__name__,
+                )
+
+
 def _sqlalchemy_url(dsn: str) -> str:
     """Ensure the URL uses the psycopg (v3) driver."""
     if dsn.startswith("postgresql+"):
@@ -122,6 +172,7 @@ class PostgresStore:
             pool_pre_ping=True,
             connect_args={"prepare_threshold": None},
         )
+        _enable_iterative_scan(self._engine)
 
     @property
     def engine(self):
@@ -221,10 +272,10 @@ class PostgresStore:
         limit: int,
         offset: int = 0,
     ) -> list[Memory]:
-        # NOTE: with a selective namespace/visibility filter on top of the HNSW
-        # ANN scan, a small namespace can under-return (pgvector filters the
-        # ~hnsw.ef_search candidates after the vector order-by). Raise
-        # hnsw.ef_search or add a partial index if recall matters there.
+        # The namespace/visibility filter runs AFTER the HNSW order-by, so a
+        # sparse namespace used to under-return: rows that never entered the
+        # ~ef_search candidate set, not rows that ranked low. Fixed by
+        # hnsw.iterative_scan, set per connection above (#169).
         distance = MemoryRow.embedding.cosine_distance(list(embedding))
         stmt = (
             select(MemoryRow, (1 - distance).label("score"))

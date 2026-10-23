@@ -219,3 +219,118 @@ def test_reads_defer_embedding(store):
     with Session(store._engine) as session:
         row = session.execute(select(MemoryRow).limit(1)).scalar_one()
         assert "embedding" not in sa_inspect(row).unloaded  # loaded == fetched
+
+
+# --- #169: the filter runs after the HNSW scan ------------------------------
+# pgvector collects ~hnsw.ef_search candidates by distance and only then applies
+# WHERE, so a sparse namespace can come back short -- rows that never entered
+# the candidate set rather than rows that ranked low. These drive the database
+# directly, because the behaviour being tested is the index's, not ours.
+
+NOISE_ROWS = 200
+TARGET_ROWS = 5
+QUERY = _vec((0, 1.0))
+
+
+def _seed_crowded(store):
+    """A crowded namespace nearer the query than the one being searched.
+
+    The near rows are what fills the candidate set; the far rows are what the
+    search should still find. Both are far enough apart that the ordering is
+    not a matter of floating-point luck.
+    """
+    from sqlalchemy import text
+
+    rows = []
+    for i in range(NOISE_ROWS):
+        # Nearly identical to QUERY: these crowd out everything else.
+        v = [0.0] * DIM
+        v[0], v[1] = 1.0, 0.0001 * (i + 1)
+        rows.append((new_id(), "alice", "noise", f"noise {i}", v))
+    for i in range(TARGET_ROWS):
+        # Clearly farther, but the only rows in the namespace we search.
+        v = [0.0] * DIM
+        v[0], v[1] = 0.6, 0.8
+        v[2] = 0.001 * (i + 1)
+        rows.append((new_id(), "alice", "shared", f"target {i}", v))
+
+    with store._engine.begin() as conn:
+        for rid, uid, ns, content, vec in rows:
+            conn.execute(
+                text(
+                    "INSERT INTO memories (id, user_id, namespace, content, "
+                    "embedding, confirmed) VALUES (:id, :u, :ns, :c, :e, true)"
+                ),
+                {"id": rid, "u": uid, "ns": ns, "c": content, "e": str(vec)},
+            )
+        conn.execute(text("ANALYZE memories"))
+
+
+def _search_sql(conn, *, iterative: str, ef_search: int = 4):
+    """The store's query shape, run with the scan settings under test."""
+    from sqlalchemy import text
+
+    conn.execute(text("SET LOCAL enable_seqscan = off"))
+    conn.execute(text(f"SET LOCAL hnsw.ef_search = {ef_search}"))
+    conn.execute(text(f"SET LOCAL hnsw.iterative_scan = {iterative}"))
+    return conn.execute(
+        text(
+            "SELECT id FROM memories WHERE namespace = 'shared' AND confirmed "
+            "ORDER BY embedding <=> :q LIMIT :k"
+        ),
+        {"q": str(QUERY), "k": TARGET_ROWS},
+    ).all()
+
+
+class TestASparseNamespaceDoesNotUnderReturn:
+    def test_the_hnsw_index_is_actually_used(self, store):
+        """Guards every assertion below. On a sequential scan the filter and the
+        ordering do not compete, so the rest would pass while testing nothing."""
+        from sqlalchemy import text
+
+        _seed_crowded(store)
+        with store._engine.begin() as conn:
+            conn.execute(text("SET LOCAL enable_seqscan = off"))
+            plan = "\n".join(
+                r[0]
+                for r in conn.execute(
+                    text(
+                        "EXPLAIN SELECT id FROM memories WHERE namespace = 'shared' "
+                        "AND confirmed ORDER BY embedding <=> :q LIMIT 5"
+                    ),
+                    {"q": str(QUERY)},
+                ).all()
+            )
+        assert "memories_embedding_hnsw_idx" in plan, plan
+
+    def test_without_iterative_scan_the_search_comes_up_short(self, store):
+        """The bug, demonstrated. Without this the fix below proves nothing:
+        a test that passes either way is not evidence."""
+        _seed_crowded(store)
+        with store._engine.begin() as conn:
+            rows = _search_sql(conn, iterative="off")
+        assert len(rows) < TARGET_ROWS, (
+            f"expected the filter to starve the candidate set, got {len(rows)} "
+            f"of {TARGET_ROWS} -- the premise of #169 no longer holds here"
+        )
+
+    def test_with_iterative_scan_every_match_comes_back(self, store):
+        _seed_crowded(store)
+        with store._engine.begin() as conn:
+            rows = _search_sql(conn, iterative="strict_order")
+        assert len(rows) == TARGET_ROWS
+
+    def test_the_store_returns_every_match(self, store):
+        """End to end: PostgresStore sets the GUC on connect, so its own search
+        should not need the settings above to come back complete."""
+        _seed_crowded(store)
+        found = store.search("alice", "shared", QUERY, limit=TARGET_ROWS)
+        assert len(found) == TARGET_ROWS
+        assert all(m.namespace == "shared" for m in found)
+
+    def test_the_connection_carries_the_setting(self, store):
+        from sqlalchemy import text
+
+        with store._engine.connect() as conn:
+            value = conn.execute(text("SHOW hnsw.iterative_scan")).scalar_one()
+        assert value == "strict_order"
