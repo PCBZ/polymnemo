@@ -455,8 +455,11 @@ class TestAnOlderPgvectorIsReportedNotAssumed:
             try:
                 for _ in range(3):
                     with s._engine.connect() as conn:
+                        # `SHOW` raises for a parameter nothing has set or
+                        # defined -- the placeholder rule seen from the other
+                        # side -- so use the lenient form, which gives NULL.
                         value = conn.execute(
-                            text("SHOW hnsw.iterative_scan")
+                            text("SELECT current_setting('hnsw.iterative_scan', true)")
                         ).scalar_one()
                         assert value != "strict_order", "set despite an old pgvector"
             finally:
