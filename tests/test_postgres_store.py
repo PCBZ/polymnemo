@@ -359,3 +359,109 @@ class TestASparseNamespaceDoesNotUnderReturn:
         with store._engine.connect() as conn:
             value = conn.execute(text("SHOW hnsw.iterative_scan")).scalar_one()
         assert value == "strict_order"
+
+
+class TestTheSettingSurvivesThePool:
+    """Raised on #170: psycopg opens a transaction for the SET and SET is
+    transactional, so if the listener does not commit, the first checkout's
+    rollback on return would undo it for every later use of that connection."""
+
+    def test_a_read_first_does_not_undo_it(self):
+        """pool_size=1, so the second checkout is provably the SAME connection.
+        With a larger pool this would pass by reaching a different one."""
+        from sqlalchemy import text
+
+        from polymnemo.store.postgres import PostgresStore
+
+        s = PostgresStore(
+            os.environ["TEST_DATABASE_URL"], shared_namespaces=["shared"], pool_size=1
+        )
+        try:
+            with s._engine.connect() as conn:  # a read-only first use
+                conn.execute(text("SELECT 1"))
+            with s._engine.connect() as conn:  # same connection, back from the pool
+                value = conn.execute(text("SHOW hnsw.iterative_scan")).scalar_one()
+            assert value == "strict_order"
+        finally:
+            s.close()
+
+    def test_it_holds_across_many_checkouts(self):
+        from sqlalchemy import text
+
+        from polymnemo.store.postgres import PostgresStore
+
+        s = PostgresStore(
+            os.environ["TEST_DATABASE_URL"], shared_namespaces=["shared"], pool_size=1
+        )
+        try:
+            seen = set()
+            for _ in range(5):
+                with s._engine.connect() as conn:
+                    seen.add(
+                        conn.execute(text("SHOW hnsw.iterative_scan")).scalar_one()
+                    )
+            assert seen == {"strict_order"}
+        finally:
+            s.close()
+
+
+class TestAnOlderPgvectorIsReportedNotAssumed:
+    """Postgres accepts a SET for ANY two-part name as a placeholder, so on
+    pgvector < 0.8 the statement succeeds and does nothing. Success of the SET
+    is therefore not evidence of support, and the version has to be read."""
+
+    def test_the_installed_version_is_readable(self, store):
+
+        from polymnemo.store.postgres import _MIN_PGVECTOR, _pgvector_version
+
+        with store._engine.connect() as conn:
+            version = _pgvector_version(conn.connection.cursor())
+        assert version is not None, "pgvector is not installed"
+        assert version[:2] >= _MIN_PGVECTOR, (
+            f"this test database has pgvector {version}, older than 0.8: the "
+            "iterative-scan tests above cannot pass on it"
+        )
+
+    def test_a_placeholder_set_succeeds_without_proving_support(self, store):
+        """The premise, shown rather than quoted: an unknown two-part name is
+        accepted. If this ever raises, the version check is merely redundant."""
+        from sqlalchemy import text
+
+        with store._engine.connect() as conn:
+            conn.execute(text("SET nonexistent_ext.some_option = 'x'"))
+            assert (
+                conn.execute(text("SHOW nonexistent_ext.some_option")).scalar_one()
+                == "x"
+            )
+            conn.rollback()
+
+    def test_an_old_version_warns_once_and_does_not_set(self, monkeypatch, caplog):
+        """The older-version path the reviewer asked to be tested. pgvector is
+        0.8+ here, so the version is faked -- what is under test is what the
+        listener DOES with an old one, not how to install one."""
+        import logging
+
+        from polymnemo.store import postgres as pg
+
+        monkeypatch.setattr(pg, "_pgvector_version", lambda cursor: (0, 7, 4))
+        monkeypatch.setattr(pg, "_WARNED_NO_ITERATIVE_SCAN", False)
+
+        from sqlalchemy import text
+
+        with caplog.at_level(logging.WARNING, logger="polymnemo"):
+            s = pg.PostgresStore(
+                os.environ["TEST_DATABASE_URL"], shared_namespaces=["shared"]
+            )
+            try:
+                for _ in range(3):
+                    with s._engine.connect() as conn:
+                        value = conn.execute(
+                            text("SHOW hnsw.iterative_scan")
+                        ).scalar_one()
+                        assert value != "strict_order", "set despite an old pgvector"
+            finally:
+                s.close()
+
+        warnings = [r for r in caplog.records if "iterative_scan" in r.getMessage()]
+        assert len(warnings) == 1, [r.getMessage() for r in warnings]
+        assert "0.7.4" in warnings[0].getMessage()

@@ -108,10 +108,21 @@ class MemoryRow(Base):
         )
 
 
-# Pre-0.8 pgvector has no such setting, and the SET fails. Warn once rather
-# than per connection: a deployment on an older pgvector should know its
-# filtered searches can come up short, without a line per pooled connection.
+# Warn once rather than per pooled connection: a deployment on an older pgvector
+# should know its filtered searches can come up short, without a line per
+# connection.
 _WARNED_NO_ITERATIVE_SCAN = False
+
+# hnsw.iterative_scan arrived in pgvector 0.8.0.
+_MIN_PGVECTOR = (0, 8)
+
+
+def _pgvector_version(cursor) -> tuple[int, ...] | None:
+    cursor.execute("SELECT extversion FROM pg_extension WHERE extname = 'vector'")
+    row = cursor.fetchone()
+    if row is None:
+        return None
+    return tuple(int(part) for part in row[0].split(".") if part.isdigit())
 
 
 def _enable_iterative_scan(engine) -> None:
@@ -127,8 +138,17 @@ def _enable_iterative_scan(engine) -> None:
     and relaxed ordering can hand back rows slightly out of distance order,
     which would contradict it. Relaxed is the lever if this proves too slow.
 
-    Set per connection rather than per query, so the cost of getting it wrong
-    is one log line at connect time instead of a failed search.
+    Two things an earlier version got wrong, both raised on #170:
+
+    The version is CHECKED, not inferred from whether the SET succeeded.
+    Postgres accepts a SET for any two-part name as a placeholder, so on
+    pgvector < 0.8 the statement succeeds, does nothing, and warns nobody --
+    the silent failure the warning exists to prevent.
+
+    The SET is COMMITTED. psycopg opens a transaction for it and SET is
+    transactional, so a connection whose first checkout is a read-only
+    operation would have rolled it back on return to the pool and run every
+    later filtered search with iterative scan off.
     """
 
     @event.listens_for(engine, "connect")
@@ -136,16 +156,32 @@ def _enable_iterative_scan(engine) -> None:
         global _WARNED_NO_ITERATIVE_SCAN
         try:
             with dbapi_connection.cursor() as cursor:
+                version = _pgvector_version(cursor)
+                if version is None or version[:2] < _MIN_PGVECTOR:
+                    dbapi_connection.rollback()
+                    if not _WARNED_NO_ITERATIVE_SCAN:
+                        _WARNED_NO_ITERATIVE_SCAN = True
+                        logger.warning(
+                            "pgvector %s has no hnsw.iterative_scan (needs >= 0.8); "
+                            "filtered searches may return fewer rows than exist.",
+                            ".".join(map(str, version))
+                            if version
+                            else "(not installed)",
+                        )
+                    return
                 cursor.execute("SET hnsw.iterative_scan = 'strict_order'")
+            dbapi_connection.commit()
         except Exception as exc:
-            dbapi_connection.rollback()  # the failed SET aborted the transaction
-            if not _WARNED_NO_ITERATIVE_SCAN:
-                _WARNED_NO_ITERATIVE_SCAN = True
-                logger.warning(
-                    "hnsw.iterative_scan is unavailable (%s); filtered searches "
-                    "may return fewer rows than exist. Needs pgvector >= 0.8.",
-                    type(exc).__name__,
-                )
+            # An optimisation must not become an outage: a connection that
+            # fails here is unusable, so a transient error reading the version
+            # would take every search down with it. Degrade and say so.
+            dbapi_connection.rollback()
+            logger.warning(
+                "could not enable hnsw.iterative_scan (%s: %s); filtered searches "
+                "may return fewer rows than exist.",
+                type(exc).__name__,
+                exc,
+            )
 
 
 def _sqlalchemy_url(dsn: str) -> str:
