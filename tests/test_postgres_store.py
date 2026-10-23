@@ -266,11 +266,30 @@ def _seed_crowded(store):
         conn.execute(text("ANALYZE memories"))
 
 
+def _force_hnsw(conn) -> None:
+    """Make the HNSW index the only way to answer the query.
+
+    Postgres will not otherwise use it here, and is right not to: with
+    `namespace = 'shared'` matching a handful of rows, the B-tree on namespace
+    plus an exact sort is cheaper than walking a graph. That is the planner
+    protecting us -- at this size and selectivity the under-return does not
+    happen at all.
+
+    It stops protecting us once the namespace is large enough that the vector
+    index wins on cost, which is the state this reproduces: drop the competing
+    index inside the transaction, where it rolls back at the end.
+    """
+    from sqlalchemy import text
+
+    conn.execute(text("DROP INDEX memories_namespace_idx"))
+    conn.execute(text("DROP INDEX memories_user_namespace_idx"))
+    conn.execute(text("SET LOCAL enable_seqscan = off"))
+
+
 def _search_sql(conn, *, iterative: str, ef_search: int = 4):
     """The store's query shape, run with the scan settings under test."""
     from sqlalchemy import text
 
-    conn.execute(text("SET LOCAL enable_seqscan = off"))
     conn.execute(text(f"SET LOCAL hnsw.ef_search = {ef_search}"))
     conn.execute(text(f"SET LOCAL hnsw.iterative_scan = {iterative}"))
     return conn.execute(
@@ -290,7 +309,7 @@ class TestASparseNamespaceDoesNotUnderReturn:
 
         _seed_crowded(store)
         with store._engine.begin() as conn:
-            conn.execute(text("SET LOCAL enable_seqscan = off"))
+            _force_hnsw(conn)
             plan = "\n".join(
                 r[0]
                 for r in conn.execute(
@@ -308,6 +327,7 @@ class TestASparseNamespaceDoesNotUnderReturn:
         a test that passes either way is not evidence."""
         _seed_crowded(store)
         with store._engine.begin() as conn:
+            _force_hnsw(conn)
             rows = _search_sql(conn, iterative="off")
         assert len(rows) < TARGET_ROWS, (
             f"expected the filter to starve the candidate set, got {len(rows)} "
@@ -317,12 +337,14 @@ class TestASparseNamespaceDoesNotUnderReturn:
     def test_with_iterative_scan_every_match_comes_back(self, store):
         _seed_crowded(store)
         with store._engine.begin() as conn:
+            _force_hnsw(conn)
             rows = _search_sql(conn, iterative="strict_order")
         assert len(rows) == TARGET_ROWS
 
     def test_the_store_returns_every_match(self, store):
-        """End to end: PostgresStore sets the GUC on connect, so its own search
-        should not need the settings above to come back complete."""
+        """End to end. This cannot force the plan -- the store opens its own
+        session -- so at this table size it passes whichever index is used. It
+        guards the wiring, not the recall: that is the raw-query tests above."""
         _seed_crowded(store)
         found = store.search("alice", "shared", QUERY, limit=TARGET_ROWS)
         assert len(found) == TARGET_ROWS
