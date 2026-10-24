@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import logging
 from functools import lru_cache
+from typing import Literal
 
 from fastmcp import FastMCP
 
@@ -144,18 +145,34 @@ def recall(
     namespace: str | None = None,
     limit: int = 8,
     cursor: str | None = None,
+    mode: Literal["similarity", "keyword", "rrf"] = "similarity",
 ) -> dict:
-    """Search memories by meaning and return the closest matches.
+    """Search memories and return the best matches.
 
-    Results are ranked by similarity and bounded by `limit` (default 8). Use the
-    returned `next_cursor` with `has_more` to page further — you decide whether
-    the results are enough. `namespace` selects the collection (defaults to the
-    shared namespace).
+    `mode` chooses how matches are found:
+    - `similarity` (default): by meaning. Finds a memory that says "espresso"
+      when you search "coffee", and works across languages. Poor at exact
+      strings such as IDs, names and error messages.
+    - `keyword`: by exact text. Every word of `query` must appear in the
+      memory, case-insensitively. Finds an ID or a name reliably, but knows
+      nothing about meaning, and may return fewer than `limit` or nothing.
+    - `rrf`: both, fused. Use when you are unsure which kind of query this is.
 
-    Returns `{items, total, has_more, next_cursor}`.
+    Results are bounded by `limit` (default 8). Use the returned `next_cursor`
+    with `has_more` to page further — you decide whether the results are
+    enough. `namespace` selects the collection (defaults to the shared
+    namespace). `score` is only comparable within one mode.
+
+    Returns `{items, total, has_more, next_cursor}`. `total` is the number of
+    memories in the namespace that were searched, not the number of matches.
     """
     return app.service.recall(
-        current_user(), query, namespace=namespace, limit=limit, cursor=cursor
+        current_user(),
+        query,
+        namespace=namespace,
+        limit=limit,
+        cursor=cursor,
+        mode=mode,
     )
 
 

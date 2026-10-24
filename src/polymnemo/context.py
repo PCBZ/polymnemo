@@ -13,7 +13,8 @@ validate/serialize), and the wiring shouldn't change after startup.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from collections.abc import Mapping
+from dataclasses import dataclass, field
 
 from .auth import Auth, BearerKeyAuth, StaticAuth, TokenSubjectAuth
 from .blobstore import BlobStore
@@ -21,7 +22,12 @@ from .config import settings
 from .embedding import Embedder, FastEmbedEmbedder, StubEmbedder
 from .guard import Guard, NoOpGuard
 from .ratelimit import GlobalRateLimiter
-from .retriever import Retriever, VectorRetriever
+from .retriever import (
+    HybridRetriever,
+    KeywordRetriever,
+    Retriever,
+    VectorRetriever,
+)
 from .store import InMemoryStore, Store
 
 
@@ -34,6 +40,9 @@ class AppContext:
     guard: Guard
     rate_limiter: GlobalRateLimiter | None
     blob_store: BlobStore | None
+    # Every recall mode by name. `retriever` stays the similarity default so
+    # code that predates #17 keeps working; this is what `recall(mode=...)` reads.
+    retrievers: Mapping[str, Retriever] = field(default_factory=dict)
 
     def describe(self) -> dict[str, str]:
         """Names of the active implementations (for diagnostics / ``ping``)."""
@@ -122,6 +131,12 @@ def build_context() -> AppContext:
     store: Store = _build_store()
     embedder: Embedder = _build_embedder()
     retriever: Retriever = VectorRetriever(store=store, embedder=embedder)
+    keyword: Retriever = KeywordRetriever(store=store)
+    retrievers: dict[str, Retriever] = {
+        "similarity": retriever,
+        "keyword": keyword,
+        "rrf": HybridRetriever(vector=retriever, keyword=keyword),
+    }
     auth: Auth = _build_auth()
     guard: Guard = _build_guard()
     rate_limiter: GlobalRateLimiter | None = _build_rate_limiter()
@@ -134,4 +149,5 @@ def build_context() -> AppContext:
         guard=guard,
         rate_limiter=rate_limiter,
         blob_store=blob_store,
+        retrievers=retrievers,
     )

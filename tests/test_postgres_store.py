@@ -468,3 +468,153 @@ class TestAnOlderPgvectorIsReportedNotAssumed:
         warnings = [r for r in caplog.records if "iterative_scan" in r.getMessage()]
         assert len(warnings) == 1, [r.getMessage() for r in warnings]
         assert "0.7.4" in warnings[0].getMessage()
+
+
+# --- #17: keyword search -----------------------------------------------------
+# Exact, case-insensitive substring match, every term required. These pin WHICH
+# rows match, which must not depend on the trigram index: it only accelerates.
+
+
+def _add(store, content, **kw):
+    m = _mem(content=content, **kw)
+    store.add(m, _vec((0, 1.0)))
+    return m
+
+
+class TestKeywordSearch:
+    def test_an_exact_string_is_found_and_only_it(self, store):
+        hit = _add(store, "deploy failed on order 88312")
+        _add(store, "unrelated note")
+        found = store.search_text("alice", "shared", "88312", 10)
+        assert [m.id for m in found] == [hit.id]
+
+    def test_matching_ignores_case(self, store):
+        _add(store, "Project ORION kickoff")
+        assert store.search_text("alice", "shared", "orion", 10)
+
+    def test_every_term_is_required(self, store):
+        both = _add(store, "orion kickoff")
+        _add(store, "orion")
+        _add(store, "kickoff")
+        found = store.search_text("alice", "shared", "orion kickoff", 10)
+        assert [m.id for m in found] == [both.id]
+
+    def test_a_two_character_chinese_word_is_found_mid_sentence(self, store):
+        """The case trigrams alone would likely miss: they pad on word
+        boundaries and an unspaced sentence is one word, so 咖啡 inside it
+        shares no trigram with the query. Asserts the RESULT, not the index."""
+        _add(store, "我喜欢深烘咖啡每天早上")
+        assert store.search_text("alice", "shared", "咖啡", 10)
+
+    def test_a_longer_chinese_term_is_found(self, store):
+        _add(store, "我喜欢深烘咖啡每天早上")
+        assert store.search_text("alice", "shared", "深烘咖啡", 10)
+
+    def test_a_term_that_is_absent_matches_nothing(self, store):
+        _add(store, "我喜欢深烘咖啡")
+        assert store.search_text("alice", "shared", "红茶", 10) == []
+
+    @pytest.mark.parametrize(
+        "needle,hit,miss",
+        [
+            ("100%", "100% done", "1000 done"),
+            ("a_b", "id a_b here", "id axb here"),
+            ("a\\b", "path a\\b end", "path ab end"),
+        ],
+    )
+    def test_metacharacters_match_literally(self, store, needle, hit, miss):
+        """Unescaped, `a_b` is a wildcard and `100%` matches everything."""
+        wanted = _add(store, hit)
+        _add(store, miss)
+        found = store.search_text("alice", "shared", needle, 10)
+        assert [m.id for m in found] == [wanted.id]
+
+    def test_another_namespace_is_not_searched(self, store):
+        _add(store, "orion", namespace="elsewhere")
+        assert store.search_text("alice", "shared", "orion", 10) == []
+
+    def test_a_private_namespace_is_invisible_to_other_users(self, store):
+        _add(store, "orion", user_id="alice", namespace="private")
+        assert store.search_text("bob", "private", "orion", 10) == []
+        assert store.search_text("alice", "private", "orion", 10)
+
+    def test_a_shared_namespace_is_visible_to_everyone(self, store):
+        _add(store, "orion", user_id="alice", namespace="shared")
+        assert store.search_text("bob", "shared", "orion", 10)
+
+    def test_an_unconfirmed_media_memory_is_hidden(self, store):
+        m = Memory(
+            id=new_id(),
+            user_id="alice",
+            namespace="shared",
+            content="orion photo",
+            confirmed=False,
+        )
+        store.add(m, _vec((0, 1.0)))
+        assert store.search_text("alice", "shared", "orion", 10) == []
+
+    def test_results_are_sliced_by_offset_and_limit(self, store):
+        for i in range(5):
+            _add(store, f"orion {i}")
+        p1 = store.search_text("alice", "shared", "orion", 2, 0)
+        p2 = store.search_text("alice", "shared", "orion", 2, 2)
+        assert len(p1) == len(p2) == 2
+        assert {m.id for m in p1}.isdisjoint({m.id for m in p2})
+
+    def test_hits_carry_a_numeric_score(self, store):
+        """word_similarity must exist, which means pg_trgm is installed."""
+        _add(store, "orion")
+        assert isinstance(
+            store.search_text("alice", "shared", "orion", 10)[0].score, float
+        )
+
+    def test_a_tighter_match_ranks_first(self, store):
+        """word_similarity favours a chunk the query dominates over one it is
+        lost in."""
+        short = _add(store, "orion")
+        _add(store, "orion " + "padding " * 30)
+        assert store.search_text("alice", "shared", "orion", 10)[0].id == short.id
+
+    def test_an_empty_query_matches_nothing(self, store):
+        _add(store, "orion")
+        assert store.search_text("alice", "shared", "   ", 10) == []
+
+
+class TestTheTrigramIndexIsReal:
+    def test_the_extension_and_index_exist(self, store):
+        from sqlalchemy import text
+
+        with store._engine.connect() as conn:
+            ext = conn.execute(
+                text("SELECT 1 FROM pg_extension WHERE extname = 'pg_trgm'")
+            ).first()
+            idx = conn.execute(
+                text(
+                    "SELECT 1 FROM pg_indexes WHERE tablename = 'memories' "
+                    "AND indexname = 'memories_content_trgm_idx'"
+                )
+            ).first()
+        assert ext is not None, "pg_trgm is not installed -- is schema.sql applied?"
+        assert idx is not None
+
+    def test_a_longer_ascii_term_uses_it(self, store):
+        """Guard, as in #170: on a sequential scan the index is irrelevant and
+        every other assertion could pass while it does nothing. Only ASCII is
+        asserted -- whether it helps for Chinese depends on how the server's
+        locale classifies those characters, and is not known from here."""
+        from sqlalchemy import text
+
+        for i in range(20):
+            _add(store, f"orion note {i}")
+        with store._engine.connect() as conn:
+            conn.execute(text("SET LOCAL enable_seqscan = off"))
+            plan = "\n".join(
+                r[0]
+                for r in conn.execute(
+                    text(
+                        "EXPLAIN SELECT id FROM memories WHERE content ILIKE '%orion%'"
+                    )
+                ).all()
+            )
+            conn.rollback()
+        assert "memories_content_trgm_idx" in plan, plan

@@ -35,6 +35,7 @@ from sqlalchemy.orm import DeclarativeBase, Mapped, Session, defer, mapped_colum
 
 from ..config import settings
 from ..models import Memory
+from .text import keyword_terms, like_escape
 
 logger = logging.getLogger("polymnemo")
 
@@ -330,6 +331,48 @@ class PostgresStore:
             results = session.execute(stmt).all()
             _observe("search", [row for row, _ in results])
             return [row.to_memory(score=float(score)) for row, score in results]
+
+    def search_text(
+        self,
+        user_id: str,
+        namespace: str,
+        query: str,
+        limit: int,
+        offset: int = 0,
+    ) -> list[Memory]:
+        terms = keyword_terms(query)
+        if not terms:
+            return []
+        # Exact substring match, every term required. ILIKE rather than
+        # pg_trgm's similarity operators because it is correct for any script
+        # and any term length: trigrams pad on word boundaries, and an unspaced
+        # Chinese sentence is one "word", so a 2-character term in the middle
+        # of it would yield no matching trigram at all. The GIN trigram index
+        # (schema.sql) only ever ACCELERATES this; it cannot change the result.
+        #
+        # word_similarity ranks the hits. It may be 0 for CJK text, in which
+        # case recency breaks the tie -- hits are still correct, just unordered.
+        score = func.word_similarity(query, MemoryRow.content)
+        stmt = (
+            select(MemoryRow, score.label("score"))
+            .options(defer(MemoryRow.embedding))
+            .where(
+                MemoryRow.namespace == namespace,
+                self._visible(user_id),
+                MemoryRow.confirmed,
+                *[
+                    MemoryRow.content.ilike(f"%{like_escape(t)}%", escape="\\")
+                    for t in terms
+                ],
+            )
+            .order_by(score.desc(), MemoryRow.created_at.desc(), MemoryRow.id)
+            .limit(limit)
+            .offset(offset)
+        )
+        with Session(self._engine) as session:
+            results = session.execute(stmt).all()
+            _observe("search_text", [row for row, _ in results])
+            return [row.to_memory(score=float(sc)) for row, sc in results]
 
     def list_memories(
         self, user_id: str, namespace: str, limit: int, offset: int = 0
