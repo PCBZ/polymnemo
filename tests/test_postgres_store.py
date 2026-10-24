@@ -2,6 +2,7 @@
 with the pgvector extension and the schema applied (scripts/schema.sql)."""
 
 import os
+from contextlib import contextmanager
 
 import pytest
 
@@ -219,3 +220,251 @@ def test_reads_defer_embedding(store):
     with Session(store._engine) as session:
         row = session.execute(select(MemoryRow).limit(1)).scalar_one()
         assert "embedding" not in sa_inspect(row).unloaded  # loaded == fetched
+
+
+# --- #169: the filter runs after the HNSW scan ------------------------------
+# pgvector collects ~hnsw.ef_search candidates by distance and only then applies
+# WHERE, so a sparse namespace can come back short -- rows that never entered
+# the candidate set rather than rows that ranked low. These drive the database
+# directly, because the behaviour being tested is the index's, not ours.
+
+NOISE_ROWS = 200
+TARGET_ROWS = 5
+QUERY = _vec((0, 1.0))
+
+
+def _seed_crowded(store):
+    """A crowded namespace nearer the query than the one being searched.
+
+    The near rows are what fills the candidate set; the far rows are what the
+    search should still find. Both are far enough apart that the ordering is
+    not a matter of floating-point luck.
+    """
+    from sqlalchemy import text
+
+    rows = []
+    for i in range(NOISE_ROWS):
+        # Nearly identical to QUERY: these crowd out everything else.
+        v = [0.0] * DIM
+        v[0], v[1] = 1.0, 0.0001 * (i + 1)
+        rows.append((new_id(), "alice", "noise", f"noise {i}", v))
+    for i in range(TARGET_ROWS):
+        # Clearly farther, but the only rows in the namespace we search.
+        v = [0.0] * DIM
+        v[0], v[1] = 0.6, 0.8
+        v[2] = 0.001 * (i + 1)
+        rows.append((new_id(), "alice", "shared", f"target {i}", v))
+
+    with store._engine.begin() as conn:
+        for rid, uid, ns, content, vec in rows:
+            conn.execute(
+                text(
+                    "INSERT INTO memories (id, user_id, namespace, content, "
+                    "embedding, confirmed) VALUES (:id, :u, :ns, :c, :e, true)"
+                ),
+                {"id": rid, "u": uid, "ns": ns, "c": content, "e": str(vec)},
+            )
+        conn.execute(text("ANALYZE memories"))
+
+
+@contextmanager
+def _hnsw_only(store):
+    """Yield a connection where HNSW is the only way to answer the query.
+
+    Postgres will not otherwise use it here, and is right not to: with
+    `namespace = 'shared'` matching a handful of rows, the B-tree on namespace
+    plus an exact sort beats walking a graph. That is the planner protecting us
+    -- at this size and selectivity the under-return does not happen at all. It
+    stops protecting us once a namespace is large enough that the vector index
+    wins on cost, which is the state this reproduces.
+
+    `connect()`, not `begin()`: the latter COMMITS on a clean exit, so the
+    dropped indexes would not come back and every later test would fail on a
+    missing index. Closing an uncommitted connection rolls the DDL back.
+    """
+    from sqlalchemy import text
+
+    with store._engine.connect() as conn:
+        conn.execute(text("DROP INDEX memories_namespace_idx"))
+        conn.execute(text("DROP INDEX memories_user_namespace_idx"))
+        conn.execute(text("SET LOCAL enable_seqscan = off"))
+        yield conn
+        conn.rollback()  # explicit: the indexes are restored here
+
+
+def _search_sql(conn, *, iterative: str, ef_search: int = 4):
+    """The store's query shape, run with the scan settings under test."""
+    from sqlalchemy import text
+
+    conn.execute(text(f"SET LOCAL hnsw.ef_search = {ef_search}"))
+    conn.execute(text(f"SET LOCAL hnsw.iterative_scan = {iterative}"))
+    return conn.execute(
+        text(
+            "SELECT id FROM memories WHERE namespace = 'shared' AND confirmed "
+            "ORDER BY embedding <=> :q LIMIT :k"
+        ),
+        {"q": str(QUERY), "k": TARGET_ROWS},
+    ).all()
+
+
+class TestASparseNamespaceDoesNotUnderReturn:
+    def test_the_hnsw_index_is_actually_used(self, store):
+        """Guards every assertion below. On a sequential scan the filter and the
+        ordering do not compete, so the rest would pass while testing nothing."""
+        from sqlalchemy import text
+
+        _seed_crowded(store)
+        with _hnsw_only(store) as conn:
+            plan = "\n".join(
+                r[0]
+                for r in conn.execute(
+                    text(
+                        "EXPLAIN SELECT id FROM memories WHERE namespace = 'shared' "
+                        "AND confirmed ORDER BY embedding <=> :q LIMIT 5"
+                    ),
+                    {"q": str(QUERY)},
+                ).all()
+            )
+        assert "memories_embedding_hnsw_idx" in plan, plan
+
+    def test_without_iterative_scan_the_search_comes_up_short(self, store):
+        """The bug, demonstrated. Without this the fix below proves nothing:
+        a test that passes either way is not evidence."""
+        _seed_crowded(store)
+        with _hnsw_only(store) as conn:
+            rows = _search_sql(conn, iterative="off")
+        assert len(rows) < TARGET_ROWS, (
+            f"expected the filter to starve the candidate set, got {len(rows)} "
+            f"of {TARGET_ROWS} -- the premise of #169 no longer holds here"
+        )
+
+    def test_with_iterative_scan_every_match_comes_back(self, store):
+        _seed_crowded(store)
+        with _hnsw_only(store) as conn:
+            rows = _search_sql(conn, iterative="strict_order")
+        assert len(rows) == TARGET_ROWS
+
+    def test_the_store_returns_every_match(self, store):
+        """End to end. This cannot force the plan -- the store opens its own
+        session -- so at this table size it passes whichever index is used. It
+        guards the wiring, not the recall: that is the raw-query tests above."""
+        _seed_crowded(store)
+        found = store.search("alice", "shared", QUERY, limit=TARGET_ROWS)
+        assert len(found) == TARGET_ROWS
+        assert all(m.namespace == "shared" for m in found)
+
+    def test_the_connection_carries_the_setting(self, store):
+        from sqlalchemy import text
+
+        with store._engine.connect() as conn:
+            value = conn.execute(text("SHOW hnsw.iterative_scan")).scalar_one()
+        assert value == "strict_order"
+
+
+class TestTheSettingSurvivesThePool:
+    """Raised on #170: psycopg opens a transaction for the SET and SET is
+    transactional, so if the listener does not commit, the first checkout's
+    rollback on return would undo it for every later use of that connection."""
+
+    def test_a_read_first_does_not_undo_it(self):
+        """pool_size=1, so the second checkout is provably the SAME connection.
+        With a larger pool this would pass by reaching a different one."""
+        from sqlalchemy import text
+
+        from polymnemo.store.postgres import PostgresStore
+
+        s = PostgresStore(
+            os.environ["TEST_DATABASE_URL"], shared_namespaces=["shared"], pool_size=1
+        )
+        try:
+            with s._engine.connect() as conn:  # a read-only first use
+                conn.execute(text("SELECT 1"))
+            with s._engine.connect() as conn:  # same connection, back from the pool
+                value = conn.execute(text("SHOW hnsw.iterative_scan")).scalar_one()
+            assert value == "strict_order"
+        finally:
+            s.close()
+
+    def test_it_holds_across_many_checkouts(self):
+        from sqlalchemy import text
+
+        from polymnemo.store.postgres import PostgresStore
+
+        s = PostgresStore(
+            os.environ["TEST_DATABASE_URL"], shared_namespaces=["shared"], pool_size=1
+        )
+        try:
+            seen = set()
+            for _ in range(5):
+                with s._engine.connect() as conn:
+                    seen.add(
+                        conn.execute(text("SHOW hnsw.iterative_scan")).scalar_one()
+                    )
+            assert seen == {"strict_order"}
+        finally:
+            s.close()
+
+
+class TestAnOlderPgvectorIsReportedNotAssumed:
+    """Postgres accepts a SET for ANY two-part name as a placeholder, so on
+    pgvector < 0.8 the statement succeeds and does nothing. Success of the SET
+    is therefore not evidence of support, and the version has to be read."""
+
+    def test_the_installed_version_is_readable(self, store):
+
+        from polymnemo.store.postgres import _MIN_PGVECTOR, _pgvector_version
+
+        with store._engine.connect() as conn:
+            version = _pgvector_version(conn.connection.cursor())
+        assert version is not None, "pgvector is not installed"
+        assert version[:2] >= _MIN_PGVECTOR, (
+            f"this test database has pgvector {version}, older than 0.8: the "
+            "iterative-scan tests above cannot pass on it"
+        )
+
+    def test_a_placeholder_set_succeeds_without_proving_support(self, store):
+        """The premise, shown rather than quoted: an unknown two-part name is
+        accepted. If this ever raises, the version check is merely redundant."""
+        from sqlalchemy import text
+
+        with store._engine.connect() as conn:
+            conn.execute(text("SET nonexistent_ext.some_option = 'x'"))
+            assert (
+                conn.execute(text("SHOW nonexistent_ext.some_option")).scalar_one()
+                == "x"
+            )
+            conn.rollback()
+
+    def test_an_old_version_warns_once_and_does_not_set(self, monkeypatch, caplog):
+        """The older-version path the reviewer asked to be tested. pgvector is
+        0.8+ here, so the version is faked -- what is under test is what the
+        listener DOES with an old one, not how to install one."""
+        import logging
+
+        from polymnemo.store import postgres as pg
+
+        monkeypatch.setattr(pg, "_pgvector_version", lambda cursor: (0, 7, 4))
+        monkeypatch.setattr(pg, "_WARNED_NO_ITERATIVE_SCAN", False)
+
+        from sqlalchemy import text
+
+        with caplog.at_level(logging.WARNING, logger="polymnemo"):
+            s = pg.PostgresStore(
+                os.environ["TEST_DATABASE_URL"], shared_namespaces=["shared"]
+            )
+            try:
+                for _ in range(3):
+                    with s._engine.connect() as conn:
+                        # `SHOW` raises for a parameter nothing has set or
+                        # defined -- the placeholder rule seen from the other
+                        # side -- so use the lenient form, which gives NULL.
+                        value = conn.execute(
+                            text("SELECT current_setting('hnsw.iterative_scan', true)")
+                        ).scalar_one()
+                        assert value != "strict_order", "set despite an old pgvector"
+            finally:
+                s.close()
+
+        warnings = [r for r in caplog.records if "iterative_scan" in r.getMessage()]
+        assert len(warnings) == 1, [r.getMessage() for r in warnings]
+        assert "0.7.4" in warnings[0].getMessage()
