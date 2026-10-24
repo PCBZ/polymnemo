@@ -16,6 +16,7 @@ from .config import settings
 from .context import AppContext
 from .guard import GuardBlocked
 from .models import Memory, new_id
+from .retriever import RECALL_MODES
 
 logger = logging.getLogger("polymnemo")
 
@@ -37,6 +38,25 @@ def _page(rows: list[Memory], total: int, offset: int) -> dict:
         "total": total,
         "has_more": has_more,
         "next_cursor": str(next_offset) if has_more else None,
+    }
+
+
+def _page_overfetched(rows: list[Memory], limit: int, total: int, offset: int) -> dict:
+    """Shape a page from `limit + 1` fetched rows: the extra one is the proof
+    there is more, so `has_more` never promises a page that comes back empty.
+
+    `_page` cannot be used for keyword and rrf. It infers `has_more` from the
+    namespace size, which is right when every row is rankable (similarity) and
+    wrong when hits are a subset -- it would call a 3-hit result `has_more`
+    in a namespace of 500 and send the caller to an empty next page.
+    """
+    has_more = len(rows) > limit
+    rows = rows[:limit]
+    return {
+        "items": [row.to_public() for row in rows],
+        "total": total,
+        "has_more": has_more,
+        "next_cursor": str(offset + limit) if has_more else None,
     }
 
 
@@ -124,21 +144,38 @@ class MemoryService:
         namespace: str | None = None,
         limit: int | None = None,
         cursor: str | None = None,
+        mode: str = "similarity",
     ) -> dict:
-        """Semantic search: return bounded, similarity-ranked memories plus
-        pagination metadata. The server ranks and bounds; the client decides
-        whether the results are enough or to page further.
+        """Search: return bounded, ranked memories plus pagination metadata. The
+        server ranks and bounds; the client decides whether the results are
+        enough or to page further.
+
+        ``mode`` picks how to rank (#17): ``similarity`` by meaning (the
+        default), ``keyword`` by exact text, ``rrf`` by both fused. ``total`` is
+        the size of the pool searched in every mode, not the number of hits.
         """
         query = (query or "").strip()
         if not query:
             raise ValueError("query is empty — provide a non-empty search string.")
+        if mode not in RECALL_MODES:
+            raise ValueError(
+                f"unknown mode '{mode}' — use one of: {', '.join(RECALL_MODES)}."
+            )
 
         ns = namespace or settings.default_namespace
         limit = settings.recall_limit if limit is None else max(1, limit)
         offset = _parse_offset(cursor)
+        total = self.ctx.store.count(user_id, ns)
 
-        rows = self.ctx.retriever.search(user_id, query, ns, limit, offset)
-        return _page(rows, self.ctx.store.count(user_id, ns), offset)
+        if mode == "similarity":
+            rows = self.ctx.retriever.search(user_id, query, ns, limit, offset)
+            return _page(rows, total, offset)
+
+        retriever = self.ctx.retrievers.get(mode)
+        if retriever is None:
+            raise ValueError(f"mode '{mode}' is not available in this deployment.")
+        rows = retriever.search(user_id, query, ns, limit + 1, offset)
+        return _page_overfetched(rows, limit, total, offset)
 
     def list_memories(
         self,

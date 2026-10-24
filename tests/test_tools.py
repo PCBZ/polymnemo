@@ -98,3 +98,30 @@ async def test_session_tools_round_trip():
                 break
             page += 1
         assert loaded == content
+
+
+async def test_recall_advertises_its_modes_and_defaults_to_similarity():
+    """The schema is what an LLM reads to decide how to call it, so the enum and
+    the default are part of the contract."""
+    async with Client(server.mcp) as client:
+        tools = {t.name: t for t in await client.list_tools()}
+        mode = tools["recall"].inputSchema["properties"]["mode"]
+        assert set(mode["enum"]) == {"similarity", "keyword", "rrf"}
+        assert mode["default"] == "similarity"
+        assert "mode" not in tools["recall"].inputSchema.get("required", [])
+
+
+async def test_recall_keyword_mode_over_the_wire():
+    async with Client(server.mcp) as client:
+        await client.call_tool("remember", {"content": "order 88312 failed"})
+        await client.call_tool("remember", {"content": "unrelated note"})
+        out = (
+            await client.call_tool("recall", {"query": "88312", "mode": "keyword"})
+        ).data
+        assert [i["content"] for i in out["items"]] == ["order 88312 failed"]
+
+
+async def test_recall_rejects_an_unknown_mode():
+    async with Client(server.mcp) as client:
+        with pytest.raises(ToolError):
+            await client.call_tool("recall", {"query": "x", "mode": "fuzzy"})
