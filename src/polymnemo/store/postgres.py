@@ -344,16 +344,16 @@ class PostgresStore:
         terms = keyword_terms(query)
         if not terms:
             return []
-        # Exact substring match, every term required. ILIKE rather than
-        # pg_trgm's similarity operators because it is correct for any script
-        # and any term length: trigrams pad on word boundaries, and an unspaced
-        # Chinese sentence is one "word", so a 2-character term in the middle
-        # of it would yield no matching trigram at all. The GIN trigram index
-        # (schema.sql) only ever ACCELERATES this; it cannot change the result.
+        # Exact substring match, every term required: predictable for IDs and
+        # error strings, which is what keyword mode is for. The GIN trigram
+        # index (schema.sql) only accelerates this; it cannot change which rows
+        # match.
         #
-        # word_similarity ranks the hits. It may be 0 for CJK text, in which
-        # case recency breaks the tie -- hits are still correct, just unordered.
-        score = func.word_similarity(query, MemoryRow.content)
+        # similarity() ranks the hits, not word_similarity(): that scores the
+        # best-matching PART of the text, so an exact word scores 1.0 whether
+        # the chunk is one word or thirty, and ranking collapses to recency.
+        # similarity() penalises a chunk the query is lost in.
+        score = func.similarity(MemoryRow.content, query)
         stmt = (
             select(MemoryRow, score.label("score"))
             .options(defer(MemoryRow.embedding))

@@ -101,9 +101,10 @@ class InMemoryStore:
                 continue
             text = mem.content.casefold()
             if all(t in text for t in terms):
-                # How much of the chunk the query accounts for: a stand-in for
-                # PostgresStore's word_similarity, and like it only meaningful
-                # within this mode.
+                # How much of the chunk the query accounts for. Orders hits the
+                # way PostgresStore's similarity() does (tighter chunk first),
+                # but the values differ, so a score means something only within
+                # one store and one mode.
                 density = sum(len(t) for t in terms) / max(len(text), 1)
                 scored.append((density, mem))
         scored.sort(key=lambda pair: (pair[0], pair[1].created_at), reverse=True)

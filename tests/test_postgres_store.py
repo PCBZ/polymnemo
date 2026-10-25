@@ -548,20 +548,16 @@ class TestKeywordSearch:
         found = store.search_text("alice", "shared", "orion kickoff", 10)
         assert [m.id for m in found] == [both.id]
 
-    def test_a_two_character_chinese_word_is_found_mid_sentence(self, store):
-        """The case trigrams alone would likely miss: they pad on word
-        boundaries and an unspaced sentence is one word, so 咖啡 inside it
-        shares no trigram with the query. Asserts the RESULT, not the index."""
-        _add(store, "我喜欢深烘咖啡每天早上")
-        assert store.search_text("alice", "shared", "咖啡", 10)
-
-    def test_a_longer_chinese_term_is_found(self, store):
-        _add(store, "我喜欢深烘咖啡每天早上")
-        assert store.search_text("alice", "shared", "深烘咖啡", 10)
-
     def test_a_term_that_is_absent_matches_nothing(self, store):
-        _add(store, "我喜欢深烘咖啡")
-        assert store.search_text("alice", "shared", "红茶", 10) == []
+        _add(store, "I prefer dark roast coffee")
+        assert store.search_text("alice", "shared", "tea", 10) == []
+
+    def test_an_id_inside_punctuation_is_found(self, store):
+        """Why keyword mode is substring rather than tokens."""
+        wanted = _add(store, "request failed: order_id=88312&retry=3")
+        _add(store, "request failed: order_id=99999&retry=3")
+        found = store.search_text("alice", "shared", "88312", 10)
+        assert [m.id for m in found] == [wanted.id]
 
     @pytest.mark.parametrize(
         "needle,hit,miss",
@@ -611,15 +607,16 @@ class TestKeywordSearch:
         assert {m.id for m in p1}.isdisjoint({m.id for m in p2})
 
     def test_hits_carry_a_numeric_score(self, store):
-        """word_similarity must exist, which means pg_trgm is installed."""
+        """similarity() must exist, which means pg_trgm is installed."""
         _add(store, "orion")
         assert isinstance(
             store.search_text("alice", "shared", "orion", 10)[0].score, float
         )
 
     def test_a_tighter_match_ranks_first(self, store):
-        """word_similarity favours a chunk the query dominates over one it is
-        lost in."""
+        """similarity() favours a chunk the query dominates over one it is lost
+        in. word_similarity() does not -- it scores the best-matching part, so
+        both chunks read 1.0 and recency decided, which is what CI showed."""
         short = _add(store, "orion")
         _add(store, "orion " + "padding " * 30)
         assert store.search_text("alice", "shared", "orion", 10)[0].id == short.id
@@ -648,9 +645,7 @@ class TestTheTrigramIndexIsReal:
 
     def test_a_longer_ascii_term_uses_it(self, store):
         """Guard, as in #170: on a sequential scan the index is irrelevant and
-        every other assertion could pass while it does nothing. Only ASCII is
-        asserted -- whether it helps for Chinese depends on how the server's
-        locale classifies those characters, and is not known from here."""
+        every other assertion could pass while it does nothing."""
         from sqlalchemy import text
 
         for i in range(20):

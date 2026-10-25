@@ -1,10 +1,10 @@
 """Keyword matching rules shared by every store, so they agree on what a hit is.
 
 A keyword hit is an exact, case-insensitive SUBSTRING match, with every
-whitespace-separated term required. Substring rather than tokens because it is
-correct for any script and any term length: Chinese has no spaces to tokenise
-on, and a 2-character word is the commonest length there. A trigram index may
-make it faster, but never changes which rows match.
+whitespace-separated term required. Substring rather than tokens because the
+point of keyword mode is an ID or an error string, where `order_id=88312`
+should match `88312` and stemming would only get in the way. A trigram index
+may make it faster, but never changes which rows match.
 """
 
 from __future__ import annotations

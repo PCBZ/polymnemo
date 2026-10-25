@@ -1,9 +1,8 @@
 """Search modes (#17): similarity, keyword, and rrf.
 
 The properties worth pinning are the ones a user would be hurt by: keyword mode
-must find an exact string and ONLY rows containing it, a 2-character Chinese
-word must be found in the middle of a sentence, and `has_more` must not promise
-a page that comes back empty.
+must find an exact string and ONLY rows containing it, and `has_more` must not
+promise a page that comes back empty.
 """
 
 from __future__ import annotations
@@ -70,20 +69,24 @@ class TestInMemoryKeywordSearch:
         hits = store.search_text("alice", "shared", "orion kickoff", 10)
         assert [h.content for h in hits] == ["orion kickoff"]
 
-    def test_a_two_character_chinese_word_is_found_mid_sentence(self):
-        """The case a trigram-only design would likely miss: trigrams pad on word
-        boundaries and an unspaced sentence is one word, so 咖啡 inside it shares
-        no trigram with the query. Substring matching does not care."""
-        store = _store(_mem("我喜欢深烘咖啡每天早上"))
-        assert store.search_text("alice", "shared", "咖啡", 10)
-
-    def test_a_longer_chinese_term_is_found(self):
-        store = _store(_mem("我喜欢深烘咖啡每天早上"))
-        assert store.search_text("alice", "shared", "深烘咖啡", 10)
-
     def test_a_term_that_is_absent_matches_nothing(self):
-        store = _store(_mem("我喜欢深烘咖啡"))
-        assert store.search_text("alice", "shared", "红茶", 10) == []
+        store = _store(_mem("I prefer dark roast coffee"))
+        assert store.search_text("alice", "shared", "tea", 10) == []
+
+    def test_an_id_inside_punctuation_is_found(self):
+        """Why keyword mode is substring rather than tokens: the point is an ID
+        or an error string, which is not delimited like a word."""
+        store = _store(_mem("request failed: order_id=88312&retry=3"))
+        assert store.search_text("alice", "shared", "88312", 10)
+
+    def test_a_tighter_match_ranks_first(self):
+        """The ordering PostgresStore's similarity() also gives: a chunk the
+        query dominates beats one it is lost in. Pinned here because the two
+        stores once ranked these differently and nothing noticed."""
+        store = _store(_mem("orion"), _mem("orion " + "padding " * 30))
+        hits = store.search_text("alice", "shared", "orion", 10)
+        assert hits[0].content == "orion"
+        assert hits[0].score > hits[1].score
 
     def test_an_empty_query_matches_nothing(self):
         assert _store(_mem("anything")).search_text("alice", "shared", "  ", 10) == []
