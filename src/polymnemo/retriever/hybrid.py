@@ -19,10 +19,13 @@ from .base import Retriever
 # both lists beats one at the very top of only one.
 RRF_K = 60
 
-# How many candidates each leg contributes per row asked for. The fused top-8
-# can contain a vector rank-12 and a keyword rank-3, so each leg has to look
-# well past what is finally returned. The one real tunable here.
-DEPTH_FACTOR = 5
+# How many candidates each leg contributes. FIXED, not a multiple of the page
+# asked for: a fused rank depends on a row's place in BOTH lists, so reading the
+# legs deeper on page 2 can reorder rows that page 1 already returned, repeating
+# one and losing another. Every page of a cursor sequence fuses the same window
+# and slices it, so paging is stable at the price of a ceiling -- rows ranked
+# past the window in both legs are not reachable by paging.
+RRF_DEPTH = 50
 
 
 def rrf_fuse(rankings: Sequence[Sequence[Memory]], k: int = RRF_K) -> list[Memory]:
@@ -50,12 +53,12 @@ class HybridRetriever:
         vector: Retriever,
         keyword: Retriever,
         *,
-        depth_factor: int = DEPTH_FACTOR,
+        depth: int = RRF_DEPTH,
         k: int = RRF_K,
     ) -> None:
         self.vector = vector
         self.keyword = keyword
-        self.depth_factor = depth_factor
+        self.depth = depth
         self.k = k
 
     def search(
@@ -66,9 +69,11 @@ class HybridRetriever:
         limit: int,
         offset: int = 0,
     ) -> list[Memory]:
-        # Both legs from rank 0, never offset: a fused rank depends on a row's
-        # position in BOTH lists, so each has to be fused whole before slicing.
-        depth = (offset + limit) * self.depth_factor
+        # Both legs from rank 0, never offset, and to the SAME depth on every
+        # page; see RRF_DEPTH. A page larger than the window widens it rather
+        # than being silently truncated -- stable so long as the client keeps
+        # its page size, which it does within one cursor sequence.
+        depth = max(self.depth, limit)
         fused = rrf_fuse(
             [
                 self.vector.search(user_id, query, namespace, depth, 0),

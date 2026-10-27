@@ -14,6 +14,7 @@ import pytest
 from polymnemo.context import build_context
 from polymnemo.models import Memory, new_id
 from polymnemo.retriever import HybridRetriever, rrf_fuse
+from polymnemo.retriever.hybrid import RRF_DEPTH
 from polymnemo.service import MemoryService
 from polymnemo.store import InMemoryStore
 from polymnemo.store.text import MAX_TERMS, keyword_terms, like_escape
@@ -160,20 +161,73 @@ class _FakeRetriever:
         return self.ranking[offset : offset + limit]
 
 
+class _Leg:
+    """A leg whose ranking is fixed and which can be read to any depth."""
+
+    def __init__(self, ids):
+        self.rows = [_mem(i, mid=i) for i in ids]
+
+    def search(self, user_id, query, namespace, limit, offset=0):
+        return self.rows[offset : offset + limit]
+
+
 class TestHybridRetriever:
     def test_each_leg_is_asked_for_more_than_is_returned(self):
         """The fused top-N can hold a vector rank-12 and a keyword rank-3, so a
         leg asked for only N would never offer the row that belongs."""
         vec, kw = _FakeRetriever([]), _FakeRetriever([])
-        HybridRetriever(vec, kw, depth_factor=5).search("u", "q", "ns", limit=8)
-        assert vec.calls == [(40, 0)] and kw.calls == [(40, 0)]
+        HybridRetriever(vec, kw).search("u", "q", "ns", limit=8)
+        assert vec.calls == [(RRF_DEPTH, 0)] and kw.calls == [(RRF_DEPTH, 0)]
+        assert RRF_DEPTH > 8
 
-    def test_both_legs_start_from_rank_zero_even_when_paging(self):
-        """A fused rank depends on a row's place in BOTH lists, so each leg is
-        fused whole and the page is sliced afterwards."""
+    def test_every_page_reads_the_legs_to_the_same_depth(self):
+        """Not (offset+limit) * factor, which is what this used to assert. That
+        made page 2 fuse a different candidate set from page 1, and was the bug."""
         vec, kw = _FakeRetriever([]), _FakeRetriever([])
-        HybridRetriever(vec, kw, depth_factor=5).search("u", "q", "ns", 4, offset=8)
-        assert vec.calls == [(60, 0)] and kw.calls == [(60, 0)]
+        hybrid = HybridRetriever(vec, kw)
+        for offset in (0, 8, 16, 100):
+            hybrid.search("u", "q", "ns", limit=8, offset=offset)
+        assert {c for c in vec.calls} == {(RRF_DEPTH, 0)}
+        assert {c for c in kw.calls} == {(RRF_DEPTH, 0)}
+
+    def test_a_page_larger_than_the_window_is_not_silently_truncated(self):
+        vec, kw = _FakeRetriever([]), _FakeRetriever([])
+        HybridRetriever(vec, kw).search("u", "q", "ns", limit=RRF_DEPTH * 2)
+        assert vec.calls == [(RRF_DEPTH * 2, 0)]
+
+    def test_rows_past_the_window_are_not_reachable_by_paging(self):
+        """The price of stable paging. A row ranked beyond the window in BOTH
+        legs never appears, however far the cursor is followed. Paged in small
+        steps, because a single page larger than the window widens it."""
+        deep = [f"r{i}" for i in range(RRF_DEPTH + 20)]
+        hybrid = HybridRetriever(_Leg(deep), _Leg(deep))
+        seen: list[str] = []
+        offset = 0
+        while page := hybrid.search("u", "q", "ns", 10, offset):
+            seen.extend(m.id for m in page)
+            offset += 10
+        assert seen == deep[:RRF_DEPTH]
+
+    def test_paging_never_repeats_or_skips_a_row(self):
+        """The case the reviewer found on #172. X is vector rank 1; Y is vector
+        rank 6 AND keyword rank 11. If page 1 reads each leg 10 deep it never
+        sees Y's keyword rank, and page 2 reading 15 deep does -- so the fused
+        order changes between pages and X is returned twice while Y is lost.
+
+        The legs here return a FIXED ranking and only differ in how deep they
+        are read, which is what a real store does and what the older fakes in
+        this file could not express."""
+        vec = _Leg(["X", "a1", "a2", "a3", "a4", "Y"] + [f"v{i}" for i in range(30)])
+        kw = _Leg([f"k{i}" for i in range(10)] + ["Y"] + [f"w{i}" for i in range(30)])
+        hybrid = HybridRetriever(vec, kw)
+
+        # MemoryService.recall asks for limit+1 to learn whether another page
+        # exists, then keeps `limit`. limit=1 here, so it asks for 2.
+        pages = [hybrid.search("u", "q", "ns", 2, offset)[0].id for offset in range(8)]
+
+        assert len(set(pages)) == len(pages), f"a row came back twice: {pages}"
+        one_shot = [m.id for m in hybrid.search("u", "q", "ns", 8, 0)]
+        assert pages == one_shot, "paging disagrees with fetching the same rows at once"
 
     def test_pages_are_disjoint_and_ordered(self):
         rows = [_mem(str(i), mid=str(i)) for i in range(10)]
@@ -240,6 +294,35 @@ class TestRecallModes:
             svc.remember("alice", f"beta {i}")
         out = svc.recall("alice", "alpha", limit=5, mode="keyword")
         assert out["has_more"] is False and out["next_cursor"] is None
+
+    @pytest.mark.parametrize("mode", ["keyword", "rrf"])
+    def test_following_the_cursor_returns_each_hit_exactly_once(self, svc, mode):
+        """What a client actually does: page until has_more is false."""
+        for i in range(13):
+            svc.remember("alice", f"alpha item {i}")
+        for i in range(6):
+            svc.remember("alice", f"beta item {i}")
+
+        seen: list[str] = []
+        cursor = None
+        for _ in range(10):  # a bound, so a broken cursor fails rather than hangs
+            out = svc.recall("alice", "alpha", limit=5, cursor=cursor, mode=mode)
+            seen.extend(i["id"] for i in out["items"])
+            if not out["has_more"]:
+                break
+            cursor = out["next_cursor"]
+        else:
+            pytest.fail("the cursor never ran out")
+
+        assert len(seen) == len(set(seen)), "a row was returned on two pages"
+        # keyword returns exactly the 13 hits; rrf also returns the beta rows,
+        # which similarity ranks, so only the alpha rows are required here
+        alpha = {
+            i["id"]
+            for i in svc.list_memories("alice", limit=100)["items"]
+            if "alpha" in i["content"]
+        }
+        assert alpha <= set(seen)
 
     def test_each_mode_is_routed_to_its_own_retriever(self, svc):
         sim, kw, hy = (_FakeRetriever([]) for _ in range(3))

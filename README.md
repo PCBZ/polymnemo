@@ -189,9 +189,10 @@ polymnemo exposes MCP tools for storing, searching, and managing memories:
 | `keyword` | rows containing every word, case-insensitively | `order 88312`, a project codename, an error message | synonyms; may return fewer than `limit` or nothing |
 | `rrf` | both, fused by rank | when you are unsure which kind of query it is | — |
 
-`keyword` is an exact substring match. `score` is only comparable within one
-mode, and `total` is the size of the namespace searched, not the number of
-matches.
+`keyword` is an exact substring match. `rrf` fuses the top 50 candidates from each
+leg, so paging through it reaches at most about 100 results.
+`score` is only comparable within one mode, and `total` is the size of the
+namespace searched, not the number of matches.
 - **Sessions** — `save_session`, `load_session`
 - **Media** — `create_upload`, `confirm_upload`, `get_download_url`
 

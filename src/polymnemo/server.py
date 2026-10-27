@@ -157,6 +157,7 @@ def recall(
       memory, case-insensitively. Finds an ID or a name reliably, but knows
       nothing about meaning, and may return fewer than `limit` or nothing.
     - `rrf`: both, fused. Use when you are unsure which kind of query this is.
+      Pages through at most about 100 results.
 
     Results are bounded by `limit` (default 8). Use the returned `next_cursor`
     with `has_more` to page further — you decide whether the results are
