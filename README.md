@@ -34,7 +34,7 @@ API key), and the server makes no generative-LLM calls.
 ## Features
 
 - 🔗 **Cross-LLM shared** — point any MCP client at one endpoint; they share the same memory.
-- 🧠 **Semantic recall** — vector search over Postgres + pgvector, not keyword matching.
+- 🧠 **Semantic recall** — vector search over Postgres + pgvector by default, with exact-text and fused (RRF) modes when you need to find an ID or a name.
 - 💬 **Sessions** — save a full transcript and reload it verbatim, or recall across it.
 - 🖼️ **Multimedia** — attach files, images, or video; bytes go to object storage, only a searchable description is embedded.
 - 🔒 **Local & private** — embeddings run locally (ONNX): no embedding API key, and no generative-LLM calls, ever.
@@ -180,6 +180,19 @@ npx @modelcontextprotocol/inspector
 polymnemo exposes MCP tools for storing, searching, and managing memories:
 
 - **Memory** — `remember`, `recall`, `list_memories`, `get_memory`, `update`, `forget`
+
+`recall` takes a `mode`:
+
+| mode | finds | good for | not for |
+|---|---|---|---|
+| `similarity` (default) | by meaning, across languages | "what do I know about coffee?" | exact IDs, names, error strings |
+| `keyword` | rows containing every word, case-insensitively | `order 88312`, a project codename, an error message | synonyms; may return fewer than `limit` or nothing |
+| `rrf` | both, fused by rank | when you are unsure which kind of query it is | — |
+
+`keyword` is an exact substring match. `rrf` fuses the top 50 candidates from each
+leg, so paging through it reaches at most about 100 results.
+`score` is only comparable within one mode, and `total` is the size of the
+namespace searched, not the number of matches.
 - **Sessions** — `save_session`, `load_session`
 - **Media** — `create_upload`, `confirm_upload`, `get_download_url`
 

@@ -7,6 +7,8 @@
 -- Changing the model's dimension means recreating the column and re-embedding.
 
 CREATE EXTENSION IF NOT EXISTS vector;
+-- Trigram index for keyword search (recall mode=keyword|rrf). Trusted on Neon.
+CREATE EXTENSION IF NOT EXISTS pg_trgm;
 
 CREATE TABLE IF NOT EXISTS memories (
     id          TEXT PRIMARY KEY,
@@ -53,6 +55,13 @@ CREATE INDEX IF NOT EXISTS memories_session_idx
 -- Approximate nearest-neighbour on cosine distance (matches the retriever).
 CREATE INDEX IF NOT EXISTS memories_embedding_hnsw_idx
     ON memories USING hnsw (embedding vector_cosine_ops);
+
+-- Accelerates the ILIKE substring match behind keyword search. It never changes
+-- WHICH rows match, only how fast: trigrams cannot be extracted from a pattern
+-- under 3 characters, so a short term falls back to a scan. GIN bitmap scans are
+-- exact, so unlike the HNSW index above this has no post-filter under-return.
+CREATE INDEX IF NOT EXISTS memories_content_trgm_idx
+    ON memories USING gin (content gin_trgm_ops);
 
 -- Per-user bearer keys: {api_key -> user_id}. Superseded by api_tokens below —
 -- nothing reads this, and it stored keys in plaintext. Left in place so an

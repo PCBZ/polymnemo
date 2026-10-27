@@ -39,6 +39,22 @@ class Store(Protocol):
         """
         ...
 
+    def search_text(
+        self,
+        user_id: str,
+        namespace: str,
+        query: str,
+        limit: int,
+        offset: int = 0,
+    ) -> list[Memory]:
+        """Keyword search: rows containing every term of ``query`` (``score`` set).
+
+        An exact, case-insensitive substring match -- see ``store.text`` for why
+        it is not token-based. Unlike ``search`` this returns only hits, not the
+        whole namespace in ranked order, so it can return fewer than ``limit``.
+        """
+        ...
+
     def list_memories(
         self,
         user_id: str,

@@ -24,10 +24,10 @@ from sqlalchemy import (
     Text,
     create_engine,
     delete,
-    event,
     func,
     or_,
     select,
+    text,
     update,
 )
 from sqlalchemy import inspect as sa_inspect
@@ -35,6 +35,7 @@ from sqlalchemy.orm import DeclarativeBase, Mapped, Session, defer, mapped_colum
 
 from ..config import settings
 from ..models import Memory
+from .text import keyword_terms, like_escape
 
 logger = logging.getLogger("polymnemo")
 
@@ -108,80 +109,21 @@ class MemoryRow(Base):
         )
 
 
-# Warn once rather than per pooled connection: a deployment on an older pgvector
-# should know its filtered searches can come up short, without a line per
-# connection.
+# Warn once rather than per search: a deployment on an older pgvector should
+# know its filtered searches can come up short, without a line per request.
 _WARNED_NO_ITERATIVE_SCAN = False
 
 # hnsw.iterative_scan arrived in pgvector 0.8.0.
 _MIN_PGVECTOR = (0, 8)
 
 
-def _pgvector_version(cursor) -> tuple[int, ...] | None:
-    cursor.execute("SELECT extversion FROM pg_extension WHERE extname = 'vector'")
-    row = cursor.fetchone()
+def _pgvector_version(session) -> tuple[int, ...] | None:
+    row = session.execute(
+        text("SELECT extversion FROM pg_extension WHERE extname = 'vector'")
+    ).first()
     if row is None:
         return None
     return tuple(int(part) for part in row[0].split(".") if part.isdigit())
-
-
-def _enable_iterative_scan(engine) -> None:
-    """Keep the HNSW scan going until enough rows survive the filter.
-
-    pgvector collects about `hnsw.ef_search` candidates by distance and only
-    then applies WHERE, so a selective namespace or visibility filter can leave
-    fewer than LIMIT -- rows that never entered the candidate set rather than
-    rows that ranked low, which reads as poor recall rather than as a bug
-    (#169). Iterative scan (pgvector 0.8) rescans until the limit is met.
-
-    `strict_order`, not `relaxed_order`: search returns a `score` to the caller,
-    and relaxed ordering can hand back rows slightly out of distance order,
-    which would contradict it. Relaxed is the lever if this proves too slow.
-
-    Two things an earlier version got wrong, both raised on #170:
-
-    The version is CHECKED, not inferred from whether the SET succeeded.
-    Postgres accepts a SET for any two-part name as a placeholder, so on
-    pgvector < 0.8 the statement succeeds, does nothing, and warns nobody --
-    the silent failure the warning exists to prevent.
-
-    The SET is COMMITTED. psycopg opens a transaction for it and SET is
-    transactional, so a connection whose first checkout is a read-only
-    operation would have rolled it back on return to the pool and run every
-    later filtered search with iterative scan off.
-    """
-
-    @event.listens_for(engine, "connect")
-    def _on_connect(dbapi_connection, _record):  # pragma: no cover - needs a DB
-        global _WARNED_NO_ITERATIVE_SCAN
-        try:
-            with dbapi_connection.cursor() as cursor:
-                version = _pgvector_version(cursor)
-                if version is None or version[:2] < _MIN_PGVECTOR:
-                    dbapi_connection.rollback()
-                    if not _WARNED_NO_ITERATIVE_SCAN:
-                        _WARNED_NO_ITERATIVE_SCAN = True
-                        logger.warning(
-                            "pgvector %s has no hnsw.iterative_scan (needs >= 0.8); "
-                            "filtered searches may return fewer rows than exist.",
-                            ".".join(map(str, version))
-                            if version
-                            else "(not installed)",
-                        )
-                    return
-                cursor.execute("SET hnsw.iterative_scan = 'strict_order'")
-            dbapi_connection.commit()
-        except Exception as exc:
-            # An optimisation must not become an outage: a connection that
-            # fails here is unusable, so a transient error reading the version
-            # would take every search down with it. Degrade and say so.
-            dbapi_connection.rollback()
-            logger.warning(
-                "could not enable hnsw.iterative_scan (%s: %s); filtered searches "
-                "may return fewer rows than exist.",
-                type(exc).__name__,
-                exc,
-            )
 
 
 def _sqlalchemy_url(dsn: str) -> str:
@@ -208,7 +150,8 @@ class PostgresStore:
             pool_pre_ping=True,
             connect_args={"prepare_threshold": None},
         )
-        _enable_iterative_scan(self._engine)
+        # None until the first vector search has read the pgvector version.
+        self._iterative_scan_ok: bool | None = None
 
     @property
     def engine(self):
@@ -219,6 +162,66 @@ class PostgresStore:
 
     def close(self) -> None:
         self._engine.dispose()
+
+    def _supports_iterative_scan(self, session) -> bool:
+        """Whether this pgvector has `hnsw.iterative_scan`, read once and cached.
+
+        The version is READ, not inferred from whether a SET succeeds: Postgres
+        accepts a SET for any two-part name as a placeholder, so on pgvector
+        < 0.8 the statement succeeds, does nothing, and warns nobody.
+        """
+        global _WARNED_NO_ITERATIVE_SCAN
+        if self._iterative_scan_ok is not None:
+            return self._iterative_scan_ok
+        try:
+            # A savepoint, so a failed probe cannot abort the search's own
+            # transaction: an optimisation must not become an outage.
+            with session.begin_nested():
+                version = _pgvector_version(session)
+        except Exception as exc:
+            # Not cached: a transient error should not disable this for good.
+            logger.warning(
+                "could not read the pgvector version (%s: %s); this search will "
+                "run without hnsw.iterative_scan.",
+                type(exc).__name__,
+                exc,
+            )
+            return False
+        ok = version is not None and version[:2] >= _MIN_PGVECTOR
+        self._iterative_scan_ok = ok
+        if not ok and not _WARNED_NO_ITERATIVE_SCAN:
+            _WARNED_NO_ITERATIVE_SCAN = True
+            logger.warning(
+                "pgvector %s has no hnsw.iterative_scan (needs >= 0.8); filtered "
+                "searches may return fewer rows than exist.",
+                ".".join(map(str, version)) if version else "(not installed)",
+            )
+        return ok
+
+    def _use_iterative_scan(self, session) -> None:
+        """Keep the HNSW scan going until enough rows survive the filter (#169).
+
+        pgvector collects about `hnsw.ef_search` candidates by distance and only
+        then applies WHERE, so a selective namespace or visibility filter can
+        leave fewer than LIMIT -- rows that never entered the candidate set
+        rather than rows that ranked low, which reads as poor recall instead of
+        as a bug. Iterative scan (pgvector 0.8) rescans until the limit is met.
+
+        SET LOCAL, inside the search's own transaction. An earlier version ran a
+        session-level SET when the connection opened, and the app connects
+        through Neon's pooled endpoint: PgBouncer in transaction mode, where
+        Neon documents SET as unsupported because a connection goes back to the
+        pool after every transaction. The setting then applied to whichever
+        requests happened to land on the backend that had received it. CI could
+        not see this, since it connects straight to Postgres. pgvector's own
+        README recommends SET LOCAL for per-query settings, and it is the form
+        that survives a transaction pooler.
+
+        `strict_order`, not `relaxed_order`: search returns a `score`, and
+        relaxed ordering can hand back rows slightly out of distance order.
+        """
+        if self._supports_iterative_scan(session):
+            session.execute(text("SET LOCAL hnsw.iterative_scan = 'strict_order'"))
 
     def _visible(self, user_id: str):
         """A row is visible if the caller owns it or it's in a shared namespace."""
@@ -308,10 +311,8 @@ class PostgresStore:
         limit: int,
         offset: int = 0,
     ) -> list[Memory]:
-        # The namespace/visibility filter runs AFTER the HNSW order-by, so a
-        # sparse namespace used to under-return: rows that never entered the
-        # ~ef_search candidate set, not rows that ranked low. Fixed by
-        # hnsw.iterative_scan, set per connection above (#169).
+        # The namespace/visibility filter runs AFTER the HNSW order-by; see
+        # _use_iterative_scan for why that can under-return and how it is handled.
         distance = MemoryRow.embedding.cosine_distance(list(embedding))
         stmt = (
             select(MemoryRow, (1 - distance).label("score"))
@@ -327,9 +328,52 @@ class PostgresStore:
             .offset(offset)
         )
         with Session(self._engine) as session:
+            self._use_iterative_scan(session)
             results = session.execute(stmt).all()
             _observe("search", [row for row, _ in results])
             return [row.to_memory(score=float(score)) for row, score in results]
+
+    def search_text(
+        self,
+        user_id: str,
+        namespace: str,
+        query: str,
+        limit: int,
+        offset: int = 0,
+    ) -> list[Memory]:
+        terms = keyword_terms(query)
+        if not terms:
+            return []
+        # Exact substring match, every term required: predictable for IDs and
+        # error strings, which is what keyword mode is for. The GIN trigram
+        # index (schema.sql) only accelerates this; it cannot change which rows
+        # match.
+        #
+        # similarity() ranks the hits, not word_similarity(): that scores the
+        # best-matching PART of the text, so an exact word scores 1.0 whether
+        # the chunk is one word or thirty, and ranking collapses to recency.
+        # similarity() penalises a chunk the query is lost in.
+        score = func.similarity(MemoryRow.content, query)
+        stmt = (
+            select(MemoryRow, score.label("score"))
+            .options(defer(MemoryRow.embedding))
+            .where(
+                MemoryRow.namespace == namespace,
+                self._visible(user_id),
+                MemoryRow.confirmed,
+                *[
+                    MemoryRow.content.ilike(f"%{like_escape(t)}%", escape="\\")
+                    for t in terms
+                ],
+            )
+            .order_by(score.desc(), MemoryRow.created_at.desc(), MemoryRow.id)
+            .limit(limit)
+            .offset(offset)
+        )
+        with Session(self._engine) as session:
+            results = session.execute(stmt).all()
+            _observe("search_text", [row for row, _ in results])
+            return [row.to_memory(score=float(sc)) for row, sc in results]
 
     def list_memories(
         self, user_id: str, namespace: str, limit: int, offset: int = 0

@@ -17,6 +17,7 @@ from collections.abc import Iterable, Sequence
 from dataclasses import replace
 
 from ..models import Memory, utcnow
+from .text import keyword_terms
 
 
 def _cosine(a: Sequence[float], b: Sequence[float]) -> float:
@@ -72,6 +73,41 @@ class InMemoryStore:
                 continue
             scored.append((_cosine(embedding, emb), mem))
         scored.sort(key=lambda pair: pair[0], reverse=True)
+        out = []
+        for score, mem in scored[offset : offset + limit]:
+            clone = self._clone(mem)
+            clone.score = score
+            out.append(clone)
+        return out
+
+    def search_text(
+        self,
+        user_id: str,
+        namespace: str,
+        query: str,
+        limit: int,
+        offset: int = 0,
+    ) -> list[Memory]:
+        terms = [t.casefold() for t in keyword_terms(query)]
+        if not terms:
+            return []
+        scored: list[tuple[float, Memory]] = []
+        for mem, _ in self._rows.values():
+            if (
+                mem.namespace != namespace
+                or not self._readable(mem, user_id)
+                or not mem.confirmed
+            ):
+                continue
+            text = mem.content.casefold()
+            if all(t in text for t in terms):
+                # How much of the chunk the query accounts for. Orders hits the
+                # way PostgresStore's similarity() does (tighter chunk first),
+                # but the values differ, so a score means something only within
+                # one store and one mode.
+                density = sum(len(t) for t in terms) / max(len(text), 1)
+                scored.append((density, mem))
+        scored.sort(key=lambda pair: (pair[0], pair[1].created_at), reverse=True)
         out = []
         for score, mem in scored[offset : offset + limit]:
             clone = self._clone(mem)
